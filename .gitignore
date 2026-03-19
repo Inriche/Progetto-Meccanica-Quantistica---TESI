@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+.vscode/
+*.db
+out/*
+!out/.gitkeep
+*.db
+*.db-shm
+*.db-wal

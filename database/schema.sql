@@ -1,0 +1,41 @@
+CREATE TABLE IF NOT EXISTS candles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL,
+    timeframe TEXT NOT NULL,
+    open_time INTEGER NOT NULL,
+    close_time INTEGER NOT NULL,
+    open REAL NOT NULL,
+    high REAL NOT NULL,
+    low REAL NOT NULL,
+    close REAL NOT NULL,
+    volume REAL NOT NULL,
+    UNIQUE(symbol, timeframe, open_time)
+);
+
+CREATE TABLE IF NOT EXISTS signals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    signal_id TEXT NOT NULL UNIQUE,
+    timestamp TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    event_type TEXT DEFAULT 'signal',
+    decision TEXT NOT NULL,
+    setup TEXT NOT NULL,
+    context TEXT,
+    action TEXT,
+    why TEXT,
+    entry REAL,
+    sl REAL,
+    tp1 REAL,
+    tp2 REAL,
+    rr_estimated REAL,
+    score INTEGER,
+    ob_imbalance REAL,
+    ob_raw REAL,
+    ob_age_ms INTEGER,
+    funding_rate REAL,
+    oi_now REAL,
+    oi_change_pct REAL,
+    crowding TEXT,
+    snapshot_path TEXT,
+    ticket_path TEXT
+);
