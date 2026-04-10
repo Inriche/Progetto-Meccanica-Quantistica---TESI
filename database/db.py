@@ -53,7 +53,7 @@ class DB:
             ("tp1", "REAL"),
             ("tp2", "REAL"),
             ("rr_estimated", "REAL"),
-            ("score", "INTEGER"),
+            ("score", "REAL"),
             ("ob_imbalance", "REAL"),
             ("ob_raw", "REAL"),
             ("ob_age_ms", "INTEGER"),
@@ -79,6 +79,52 @@ class DB:
 
         for col_name, col_type in migrations:
             self._add_column_if_missing("signals", col_name, col_type)
+
+    def insert_orderbook_snapshot(self, row: Dict[str, Any]) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO orderbook_snapshots
+            (timestamp, symbol, imbalance_avg, imbalance_raw, age_ms,
+             bid_notional, ask_notional, top_bid, top_ask, spread, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                row["timestamp"],
+                row["symbol"],
+                row.get("imbalance_avg"),
+                row.get("imbalance_raw"),
+                row.get("age_ms"),
+                row.get("bid_notional"),
+                row.get("ask_notional"),
+                row.get("top_bid"),
+                row.get("top_ask"),
+                row.get("spread"),
+                row.get("source", "depth20@100ms"),
+            ),
+        )
+        self.conn.commit()
+
+    def insert_decision_log(self, row: Dict[str, Any]) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO decision_logs
+            (timestamp, symbol, trigger, event_type, decision, setup, context, action, score, ticket_path)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                row["timestamp"],
+                row["symbol"],
+                row.get("trigger"),
+                row.get("event_type"),
+                row.get("decision"),
+                row.get("setup"),
+                row.get("context"),
+                row.get("action"),
+                row.get("score"),
+                row.get("ticket_path"),
+            ),
+        )
+        self.conn.commit()
 
     def upsert_candle(self, symbol: str, timeframe: str, candle: Dict[str, Any]) -> None:
         self.conn.execute(

@@ -110,9 +110,10 @@ class EngineCycleResult:
     emitted: bool
     decision: str
     setup: str
-    score: int
+    score: float
     action: str
     event_type: str
+    context: Optional[str]
     ticket_path: Optional[str]
     trigger: str
 
@@ -156,9 +157,10 @@ class TradingEngine:
                 emitted=False,
                 decision="FLAT",
                 setup="NONE",
-                score=0,
+                score=0.0,
                 action="STAND_BY",
                 event_type="status",
+                context=None,
                 ticket_path=None,
                 trigger=trigger,
             )
@@ -183,9 +185,10 @@ class TradingEngine:
             emitted=emitted,
             decision=draft.decision,
             setup=draft.setup_name,
-            score=draft.score,
+            score=float(draft.score),
             action=draft.action,
             event_type=draft.event_type,
+            context=market.context,
             ticket_path=ticket_path,
             trigger=trigger,
         )

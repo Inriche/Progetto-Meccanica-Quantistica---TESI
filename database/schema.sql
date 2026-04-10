@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS signals (
     tp1 REAL,
     tp2 REAL,
     rr_estimated REAL,
-    score INTEGER,
+    score REAL,
     ob_imbalance REAL,
     ob_raw REAL,
     ob_age_ms INTEGER,
@@ -51,3 +51,38 @@ CREATE TABLE IF NOT EXISTS signals (
     snapshot_path TEXT,
     ticket_path TEXT
 );
+
+CREATE TABLE IF NOT EXISTS orderbook_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    imbalance_avg REAL,
+    imbalance_raw REAL,
+    age_ms INTEGER,
+    bid_notional REAL,
+    ask_notional REAL,
+    top_bid REAL,
+    top_ask REAL,
+    spread REAL,
+    source TEXT DEFAULT 'depth20@100ms'
+);
+
+CREATE INDEX IF NOT EXISTS idx_orderbook_snapshots_symbol_ts
+ON orderbook_snapshots(symbol, timestamp);
+
+CREATE TABLE IF NOT EXISTS decision_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    trigger TEXT,
+    event_type TEXT,
+    decision TEXT,
+    setup TEXT,
+    context TEXT,
+    action TEXT,
+    score REAL,
+    ticket_path TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_decision_logs_symbol_ts
+ON decision_logs(symbol, timestamp);

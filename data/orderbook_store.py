@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import List, Tuple, Optional
+from typing import Any, Dict, List, Tuple, Optional
 from collections import deque
 import time
 
@@ -59,3 +59,39 @@ class OrderBookStore:
         if self.state is None:
             return None
         return int(time.time() * 1000) - self.state.ts_ms
+
+    def snapshot_stats(self, top_n: int = 10) -> Dict[str, Any]:
+        if self.state is None:
+            return {
+                "imbalance_avg": None,
+                "imbalance_raw": None,
+                "age_ms": None,
+                "bid_notional": None,
+                "ask_notional": None,
+                "top_bid": None,
+                "top_ask": None,
+                "spread": None,
+            }
+
+        bids = self.state.bids[:top_n]
+        asks = self.state.asks[:top_n]
+
+        bid_notional = sum(p * q for p, q in bids)
+        ask_notional = sum(p * q for p, q in asks)
+
+        top_bid = bids[0][0] if bids else None
+        top_ask = asks[0][0] if asks else None
+        spread = None
+        if top_bid is not None and top_ask is not None:
+            spread = top_ask - top_bid
+
+        return {
+            "imbalance_avg": self.imbalance(top_n=top_n),
+            "imbalance_raw": self.raw_imbalance(top_n=top_n),
+            "age_ms": self.age_ms(),
+            "bid_notional": bid_notional,
+            "ask_notional": ask_notional,
+            "top_bid": top_bid,
+            "top_ask": top_ask,
+            "spread": spread,
+        }

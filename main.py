@@ -1,7 +1,9 @@
 import asyncio
 import os
+import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Dict
 
 from dateutil import tz
 
@@ -45,6 +47,8 @@ from snapshot.chart_renderer import save_snapshot
 from risk.risk_governor import RiskGovernor
 
 ROME_TZ = tz.gettz("Europe/Rome")
+ORDERBOOK_PERSIST_INTERVAL_SEC = 2.0
+EVENT_BUS_MAXSIZE = 2048
 
 
 def ensure_dirs():
@@ -130,9 +134,58 @@ async def main():
         timezone=ROME_TZ,
     )
 
+    event_bus: "asyncio.Queue[Dict[str, Any]]" = asyncio.Queue(maxsize=EVENT_BUS_MAXSIZE)
+    dropped_events = {"count": 0}
+    last_orderbook_persist_ts = {"mono": 0.0}
+
+    def publish_event(evt: Dict[str, Any]) -> None:
+        try:
+            event_bus.put_nowait(evt)
+        except asyncio.QueueFull:
+            dropped_events["count"] += 1
+
+    async def event_bus_worker() -> None:
+        while True:
+            evt = await event_bus.get()
+            try:
+                evt_type = str(evt.get("type", ""))
+                payload = evt.get("payload", {})
+                if evt_type == "orderbook_snapshot":
+                    db.insert_orderbook_snapshot(payload)
+                elif evt_type == "decision_log":
+                    db.insert_decision_log(payload)
+            except Exception as ex:
+                print(f"[EVENT_BUS] error: {ex}")
+            finally:
+                event_bus.task_done()
+
 
     async def on_depth(bids, asks):
         ob.update_from_binance_depth(bids, asks)
+        now_mono = time.monotonic()
+        if now_mono - last_orderbook_persist_ts["mono"] < ORDERBOOK_PERSIST_INTERVAL_SEC:
+            return
+
+        last_orderbook_persist_ts["mono"] = now_mono
+        stats = ob.snapshot_stats(top_n=10)
+        publish_event(
+            {
+                "type": "orderbook_snapshot",
+                "payload": {
+                    "timestamp": datetime.now(ROME_TZ).isoformat(),
+                    "symbol": CONFIG.symbol.upper(),
+                    "imbalance_avg": stats.get("imbalance_avg"),
+                    "imbalance_raw": stats.get("imbalance_raw"),
+                    "age_ms": stats.get("age_ms"),
+                    "bid_notional": stats.get("bid_notional"),
+                    "ask_notional": stats.get("ask_notional"),
+                    "top_bid": stats.get("top_bid"),
+                    "top_ask": stats.get("top_ask"),
+                    "spread": stats.get("spread"),
+                    "source": "depth20@100ms",
+                },
+            }
+        )
 
     def orderbook_points(decision: str, imb: float, runtime_cfg) -> int:
         neutral_th = float(runtime_cfg["orderbook_neutral_threshold"])
@@ -436,6 +489,23 @@ async def main():
 
     async def analyze_and_emit(trigger: str):
         result = await trading_engine.run_cycle(trigger)
+        publish_event(
+            {
+                "type": "decision_log",
+                "payload": {
+                    "timestamp": datetime.now(ROME_TZ).isoformat(),
+                    "symbol": CONFIG.symbol.upper(),
+                    "trigger": trigger,
+                    "event_type": result.event_type,
+                    "decision": result.decision,
+                    "setup": result.setup,
+                    "context": result.context,
+                    "action": result.action,
+                    "score": float(result.score),
+                    "ticket_path": result.ticket_path,
+                },
+            }
+        )
         print("=" * 90)
         print(
             f"[PIPELINE:{trigger}] decision={result.decision} "
@@ -741,6 +811,7 @@ async def main():
 
             await asyncio.sleep(1)
 
+    asyncio.create_task(event_bus_worker())
     asyncio.create_task(terminal_command_listener())
     asyncio.create_task(file_command_listener())
 
