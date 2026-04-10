@@ -98,6 +98,14 @@ def _apply_mode_scores(
     return out
 
 
+def _apply_score_threshold(df: pd.DataFrame, min_score: Optional[float]) -> pd.DataFrame:
+    if df.empty or min_score is None or "score" not in df.columns:
+        return df.copy()
+    out = df.copy()
+    out = out[pd.to_numeric(out["score"], errors="coerce") >= float(min_score)].copy()
+    return out
+
+
 def _filter_test_period(df: pd.DataFrame, *, test_start: pd.Timestamp, test_end: pd.Timestamp) -> pd.DataFrame:
     if df.empty:
         return df.copy()
@@ -149,7 +157,7 @@ def compare_scoring_modes(
         db_path=db_path,
         symbol=symbol,
         input_mode="signals",
-        min_score=min_score,
+        min_score=None,
         timeframe=timeframe,
         horizon_bars=int(horizon_bars),
         close_open_positions_at_horizon=True,
@@ -164,7 +172,13 @@ def compare_scoring_modes(
 
     for mode in MODES:
         mode_inputs = _apply_mode_scores(base_inputs, mode=mode, artifact=artifact)
-        result = run_backtest(base_config, inputs_df=mode_inputs)
+        mode_inputs = _apply_score_threshold(mode_inputs, min_score=min_score)
+        result = run_backtest(
+            base_config,
+            inputs_df=mode_inputs,
+            start_ts=start_ts,
+            end_ts=end_ts,
+        )
         m = result.metrics
         rows.append(
             {

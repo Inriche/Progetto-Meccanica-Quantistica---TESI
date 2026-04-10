@@ -369,7 +369,12 @@ def _simulate_single_trade(
     }
 
 
-def run_backtest(config: BacktestConfig, inputs_df: Optional[pd.DataFrame] = None) -> BacktestResult:
+def run_backtest(
+    config: BacktestConfig,
+    inputs_df: Optional[pd.DataFrame] = None,
+    start_ts: Any = None,
+    end_ts: Any = None,
+) -> BacktestResult:
     logger = _get_logger()
     logger.info("Backtest started input_mode=%s timeframe=%s horizon=%s", config.input_mode, config.timeframe, config.horizon_bars)
 
@@ -415,8 +420,8 @@ def run_backtest(config: BacktestConfig, inputs_df: Optional[pd.DataFrame] = Non
     equity_curve_df = pd.DataFrame(equity_points)
 
     # Benchmark window: full analyzed period (input universe), not only executed trade horizon.
-    start_ts = signals_df.iloc[0]["timestamp"] if not signals_df.empty else None
-    end_ts = signals_df.iloc[-1]["timestamp"] if not signals_df.empty else None
+    benchmark_start_ts = start_ts if start_ts is not None else (signals_df.iloc[0]["timestamp"] if not signals_df.empty else None)
+    benchmark_end_ts = end_ts if end_ts is not None else (signals_df.iloc[-1]["timestamp"] if not signals_df.empty else None)
 
     symbol_for_benchmark = config.symbol
     if symbol_for_benchmark is None and "symbol" in signals_df.columns and not signals_df.empty:
@@ -424,13 +429,13 @@ def run_backtest(config: BacktestConfig, inputs_df: Optional[pd.DataFrame] = Non
 
     market_start_price = None
     market_end_price = None
-    if start_ts is not None and end_ts is not None:
+    if benchmark_start_ts is not None and benchmark_end_ts is not None:
         market_start_price, market_end_price = _load_market_period_prices(
             db_path=config.db_path,
             timeframe=config.timeframe,
             symbol=symbol_for_benchmark,
-            start_ts=start_ts,
-            end_ts=end_ts,
+            start_ts=benchmark_start_ts,
+            end_ts=benchmark_end_ts,
         )
 
     metrics = compute_backtest_metrics(
