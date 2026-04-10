@@ -5,6 +5,11 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 
 MODEL_PATH = "out/model.joblib"
+# Scoring mode:
+# - "heuristic": legacy rules only
+# - "hybrid": blend heuristic + ML probability
+# - "ml": ML-only when model is available, otherwise safe heuristic fallback
+SCORING_MODE = os.getenv("SCORING_MODE", "hybrid").strip().lower()
 
 _ML_ARTIFACT_CACHE: Optional[Dict[str, Any]] = None
 _ML_ARTIFACT_LOAD_ATTEMPTED = False
@@ -142,13 +147,19 @@ def compute_score(
         }
     )
 
-    if ml_probability is not None:
+    mode = SCORING_MODE if SCORING_MODE in {"heuristic", "hybrid", "ml"} else "hybrid"
+    if mode == "heuristic":
+        score = heuristic_score
+    elif ml_probability is None:
+        score = heuristic_score
+    elif mode == "ml":
+        score = max(0, min(100, int(round(float(ml_probability) * 100.0))))
+        comps.append(("ml_adjustment", int(score - heuristic_score)))
+    else:
         ml_score = max(0, min(100, int(round(float(ml_probability) * 100.0))))
         final_score = int(round((0.65 * heuristic_score) + (0.35 * ml_score)))
         comps.append(("ml_adjustment", int(final_score - heuristic_score)))
         score = max(0, min(100, final_score))
-    else:
-        score = heuristic_score
 
     grade = "A" if score >= 80 else ("B" if score >= 70 else "C")
 

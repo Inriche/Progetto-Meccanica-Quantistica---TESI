@@ -12,7 +12,6 @@ try:
     from sklearn.compose import ColumnTransformer
     from sklearn.impute import SimpleImputer
     from sklearn.linear_model import LogisticRegression
-    from sklearn.model_selection import train_test_split
     from sklearn.pipeline import Pipeline
     from sklearn.preprocessing import OneHotEncoder
 except Exception as exc:  # pragma: no cover - handled at runtime
@@ -63,8 +62,16 @@ def train_first_model(
     if df.empty:
         raise ValueError("Dataset is empty or has no valid labeled rows.")
 
+    # Prefer chronological ordering when timestamp is available.
+    if "timestamp" in df.columns:
+        ts = pd.to_datetime(df["timestamp"], errors="coerce", utc=True)
+        if ts.notna().any():
+            df = df.assign(_ts_sort=ts).sort_values("_ts_sort").drop(columns=["_ts_sort"])
+
     X = df[FEATURE_COLUMNS].copy()
     y = df[LABEL_COLUMN].astype(int).copy()
+    if y.nunique() < 2:
+        raise ValueError("Training requires at least two label classes (0 and 1).")
 
     numeric_features = ["rr_estimated"]
     categorical_features = ["setup", "context", "decision"]
@@ -107,19 +114,19 @@ def train_first_model(
     )
 
     accuracy: float | None = None
-    if len(df) >= 20 and y.nunique() > 1 and y.value_counts().min() >= 2:
-        X_train, X_test, y_train, y_test = train_test_split(
-            X,
-            y,
-            test_size=0.2,
-            random_state=random_state,
-            stratify=y,
-        )
-        pipeline.fit(X_train, y_train)
-        accuracy = float(pipeline.score(X_test, y_test))
-        pipeline.fit(X, y)
-    else:
-        pipeline.fit(X, y)
+    if len(df) >= 20:
+        holdout_size = max(1, int(round(len(df) * 0.2)))
+        holdout_size = min(holdout_size, len(df) - 1)
+        X_train = X.iloc[:-holdout_size].copy()
+        y_train = y.iloc[:-holdout_size].copy()
+        X_test = X.iloc[-holdout_size:].copy()
+        y_test = y.iloc[-holdout_size:].copy()
+
+        if not X_train.empty and not X_test.empty and y_train.nunique() >= 2:
+            pipeline.fit(X_train, y_train)
+            accuracy = float(pipeline.score(X_test, y_test))
+
+    pipeline.fit(X, y)
 
     artifact: dict[str, Any] = {
         "model_type": "logistic_regression",
