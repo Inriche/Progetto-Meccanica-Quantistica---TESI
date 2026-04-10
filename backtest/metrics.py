@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import math
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import pandas as pd
 
@@ -16,13 +16,14 @@ class BacktestMetrics:
     max_drawdown: float
     sharpe_ratio: float
     sortino_ratio: float
-    returns_t_statistic: Optional[float]
-    returns_p_value: Optional[float]
-    benchmark_buy_hold_return: Optional[float]
-    alpha_vs_benchmark: Optional[float]
+    p_value: Optional[float]
+    buy_hold_return: Optional[float]
+    outperformance_vs_benchmark: Optional[float]
+    periodic_returns_observations: int
+    periodic_returns_note: str
     trades: int
 
-    def to_dict(self) -> Dict[str, Optional[float]]:
+    def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
 
@@ -30,6 +31,44 @@ def _safe_series(df: pd.DataFrame, column: str) -> pd.Series:
     if column not in df.columns:
         return pd.Series(dtype=float)
     return pd.to_numeric(df[column], errors="coerce").dropna()
+
+
+def _build_periodic_returns_from_equity(
+    equity_curve_df: pd.DataFrame,
+    *,
+    periodic_freq: str = "15min",
+) -> tuple[pd.Series, str]:
+    if equity_curve_df.empty or "timestamp" not in equity_curve_df.columns or "equity" not in equity_curve_df.columns:
+        return pd.Series(dtype=float), "equity curve unavailable"
+
+    tmp = equity_curve_df.copy()
+    tmp["timestamp"] = pd.to_datetime(tmp["timestamp"], errors="coerce")
+    tmp["equity"] = pd.to_numeric(tmp["equity"], errors="coerce")
+    tmp = tmp.dropna(subset=["timestamp", "equity"])
+    if tmp.empty:
+        return pd.Series(dtype=float), "equity curve has no valid timestamp/equity pairs"
+
+    tmp = tmp[tmp["equity"].apply(lambda v: math.isfinite(float(v)))]
+    if tmp.empty:
+        return pd.Series(dtype=float), "equity curve contains only non-finite values"
+
+    series = tmp.sort_values("timestamp").groupby("timestamp", as_index=True)["equity"].last()
+    if len(series) < 2:
+        return pd.Series(dtype=float), "equity curve has fewer than 2 points"
+
+    if periodic_freq:
+        series = series.resample(periodic_freq).last().ffill()
+
+    returns = series.pct_change()
+    returns = returns.replace([float("inf"), float("-inf")], pd.NA).dropna()
+    returns = pd.to_numeric(returns, errors="coerce").dropna()
+    returns = returns[returns.apply(lambda v: math.isfinite(float(v)))]
+
+    note = (
+        f"periodic returns built from equity curve using resample('{periodic_freq}') + last + forward-fill; "
+        "t-test vs mean zero."
+    )
+    return returns, note
 
 
 def _compute_max_drawdown(equity: pd.Series) -> float:
@@ -125,7 +164,8 @@ def compute_backtest_metrics(
     *,
     initial_capital: float,
     annualization_factor: float = 1.0,
-    benchmark_buy_hold_return: Optional[float] = None,
+    buy_hold_return: Optional[float] = None,
+    periodic_freq: str = "15min",
 ) -> BacktestMetrics:
     net_pnl = _safe_series(trades_df, "net_pnl")
     returns = _safe_series(trades_df, "return_pct")
@@ -152,8 +192,12 @@ def compute_backtest_metrics(
     max_drawdown = _compute_max_drawdown(equity)
     sharpe_ratio = _compute_sharpe(returns, annualization_factor=annualization_factor)
     sortino_ratio = _compute_sortino(returns, annualization_factor=annualization_factor)
-    t_stat, p_value = _one_sample_t_test_pvalue(returns)
-    alpha = None if benchmark_buy_hold_return is None else float(total_return - float(benchmark_buy_hold_return))
+    periodic_returns, periodic_note = _build_periodic_returns_from_equity(
+        equity_curve_df,
+        periodic_freq=periodic_freq,
+    )
+    _, p_value = _one_sample_t_test_pvalue(periodic_returns)
+    outperformance = None if buy_hold_return is None else float(total_return - float(buy_hold_return))
 
     return BacktestMetrics(
         total_return=total_return,
@@ -163,9 +207,10 @@ def compute_backtest_metrics(
         max_drawdown=max_drawdown,
         sharpe_ratio=sharpe_ratio,
         sortino_ratio=sortino_ratio,
-        returns_t_statistic=t_stat,
-        returns_p_value=p_value,
-        benchmark_buy_hold_return=benchmark_buy_hold_return,
-        alpha_vs_benchmark=alpha,
+        p_value=p_value,
+        buy_hold_return=buy_hold_return,
+        outperformance_vs_benchmark=outperformance,
+        periodic_returns_observations=int(len(periodic_returns)),
+        periodic_returns_note=periodic_note,
         trades=trades,
     )

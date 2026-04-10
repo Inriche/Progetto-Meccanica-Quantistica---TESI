@@ -75,6 +75,21 @@ def _coerce_float(v: Any) -> Optional[float]:
         return None
 
 
+def _timeframe_to_pandas_freq(timeframe: str) -> str:
+    tf = str(timeframe).lower().strip()
+    mapping = {
+        "1m": "1min",
+        "3m": "3min",
+        "5m": "5min",
+        "15m": "15min",
+        "30m": "30min",
+        "1h": "1h",
+        "4h": "4h",
+        "1d": "1d",
+    }
+    return mapping.get(tf, "15min")
+
+
 def _infer_decision(row: Dict[str, Any]) -> Optional[str]:
     raw = str(row.get("decision", "")).upper().strip()
     if raw in ("BUY", "SELL"):
@@ -369,7 +384,8 @@ def run_backtest(config: BacktestConfig, inputs_df: Optional[pd.DataFrame] = Non
             empty_trades,
             equity_curve_df,
             initial_capital=config.portfolio.initial_capital,
-            benchmark_buy_hold_return=None,
+            buy_hold_return=None,
+            periodic_freq=_timeframe_to_pandas_freq(config.timeframe),
         )
         return BacktestResult(
             config=config,
@@ -400,22 +416,17 @@ def run_backtest(config: BacktestConfig, inputs_df: Optional[pd.DataFrame] = Non
     trades_df = pd.DataFrame(trades)
     equity_curve_df = pd.DataFrame(equity_points)
 
+    # Benchmark window: full analyzed period (input universe), not only executed trade horizon.
     start_ts = signals_df.iloc[0]["timestamp"] if not signals_df.empty else None
-    end_ts = None
-    if not trades_df.empty and "exit_time" in trades_df.columns:
-        exits = pd.to_datetime(trades_df["exit_time"], errors="coerce").dropna()
-        if not exits.empty:
-            end_ts = exits.max()
-    if end_ts is None and not signals_df.empty:
-        end_ts = signals_df.iloc[-1]["timestamp"]
+    end_ts = signals_df.iloc[-1]["timestamp"] if not signals_df.empty else None
 
     symbol_for_benchmark = config.symbol
     if symbol_for_benchmark is None and "symbol" in signals_df.columns and not signals_df.empty:
         symbol_for_benchmark = str(signals_df.iloc[0]["symbol"])
 
-    benchmark_buy_hold_return = None
+    buy_hold_return = None
     if start_ts is not None and end_ts is not None:
-        benchmark_buy_hold_return = _compute_buy_hold_return(
+        buy_hold_return = _compute_buy_hold_return(
             db_path=config.db_path,
             timeframe=config.timeframe,
             symbol=symbol_for_benchmark,
@@ -427,15 +438,17 @@ def run_backtest(config: BacktestConfig, inputs_df: Optional[pd.DataFrame] = Non
         trades_df,
         equity_curve_df,
         initial_capital=config.portfolio.initial_capital,
-        benchmark_buy_hold_return=benchmark_buy_hold_return,
+        buy_hold_return=buy_hold_return,
+        periodic_freq=_timeframe_to_pandas_freq(config.timeframe),
     )
 
     logger.info(
-        "Backtest completed trades=%s total_return=%.4f benchmark=%.4f alpha=%.4f",
+        "Backtest completed trades=%s total_return=%.4f buy_hold=%.4f outperf=%.4f p_value=%s",
         len(trades_df),
         metrics.total_return,
-        metrics.benchmark_buy_hold_return if metrics.benchmark_buy_hold_return is not None else float("nan"),
-        metrics.alpha_vs_benchmark if metrics.alpha_vs_benchmark is not None else float("nan"),
+        metrics.buy_hold_return if metrics.buy_hold_return is not None else float("nan"),
+        metrics.outperformance_vs_benchmark if metrics.outperformance_vs_benchmark is not None else float("nan"),
+        str(metrics.p_value),
     )
     return BacktestResult(
         config=config,
