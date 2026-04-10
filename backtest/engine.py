@@ -199,6 +199,62 @@ def _load_future_candles(
     return df
 
 
+def _iso_to_ms(ts: Any) -> Optional[int]:
+    try:
+        if ts is None:
+            return None
+        return int(pd.Timestamp(ts).timestamp() * 1000)
+    except Exception:
+        return None
+
+
+def _compute_buy_hold_return(
+    *,
+    db_path: str,
+    timeframe: str,
+    symbol: Optional[str],
+    start_ts: Any,
+    end_ts: Any,
+) -> Optional[float]:
+    start_ms = _iso_to_ms(start_ts)
+    end_ms = _iso_to_ms(end_ts)
+    if start_ms is None or end_ms is None or end_ms < start_ms:
+        return None
+
+    if not os.path.exists(db_path):
+        return None
+
+    conn = _get_conn(db_path)
+    where = [
+        "timeframe = ?",
+        "open_time >= ?",
+        "open_time <= ?",
+    ]
+    params: list[Any] = [timeframe, start_ms, end_ms]
+    if symbol:
+        where.append("UPPER(symbol) = ?")
+        params.append(str(symbol).upper())
+
+    query = f"""
+        SELECT open_time, close
+        FROM candles
+        WHERE {" AND ".join(where)}
+        ORDER BY open_time ASC
+    """
+    df = pd.read_sql_query(query, conn, params=params)
+    conn.close()
+
+    if df.empty or len(df) < 2:
+        return None
+
+    first_close = _coerce_float(df["close"].iloc[0])
+    last_close = _coerce_float(df["close"].iloc[-1])
+    if first_close is None or last_close is None or first_close <= 0:
+        return None
+
+    return float((last_close / first_close) - 1.0)
+
+
 def _simulate_single_trade(
     *,
     signal: Dict[str, Any],
@@ -313,6 +369,7 @@ def run_backtest(config: BacktestConfig, inputs_df: Optional[pd.DataFrame] = Non
             empty_trades,
             equity_curve_df,
             initial_capital=config.portfolio.initial_capital,
+            benchmark_buy_hold_return=None,
         )
         return BacktestResult(
             config=config,
@@ -342,13 +399,44 @@ def run_backtest(config: BacktestConfig, inputs_df: Optional[pd.DataFrame] = Non
 
     trades_df = pd.DataFrame(trades)
     equity_curve_df = pd.DataFrame(equity_points)
+
+    start_ts = signals_df.iloc[0]["timestamp"] if not signals_df.empty else None
+    end_ts = None
+    if not trades_df.empty and "exit_time" in trades_df.columns:
+        exits = pd.to_datetime(trades_df["exit_time"], errors="coerce").dropna()
+        if not exits.empty:
+            end_ts = exits.max()
+    if end_ts is None and not signals_df.empty:
+        end_ts = signals_df.iloc[-1]["timestamp"]
+
+    symbol_for_benchmark = config.symbol
+    if symbol_for_benchmark is None and "symbol" in signals_df.columns and not signals_df.empty:
+        symbol_for_benchmark = str(signals_df.iloc[0]["symbol"])
+
+    benchmark_buy_hold_return = None
+    if start_ts is not None and end_ts is not None:
+        benchmark_buy_hold_return = _compute_buy_hold_return(
+            db_path=config.db_path,
+            timeframe=config.timeframe,
+            symbol=symbol_for_benchmark,
+            start_ts=start_ts,
+            end_ts=end_ts,
+        )
+
     metrics = compute_backtest_metrics(
         trades_df,
         equity_curve_df,
         initial_capital=config.portfolio.initial_capital,
+        benchmark_buy_hold_return=benchmark_buy_hold_return,
     )
 
-    logger.info("Backtest completed trades=%s total_return=%.4f", len(trades_df), metrics.total_return)
+    logger.info(
+        "Backtest completed trades=%s total_return=%.4f benchmark=%.4f alpha=%.4f",
+        len(trades_df),
+        metrics.total_return,
+        metrics.benchmark_buy_hold_return if metrics.benchmark_buy_hold_return is not None else float("nan"),
+        metrics.alpha_vs_benchmark if metrics.alpha_vs_benchmark is not None else float("nan"),
+    )
     return BacktestResult(
         config=config,
         signals_df=signals_df,
