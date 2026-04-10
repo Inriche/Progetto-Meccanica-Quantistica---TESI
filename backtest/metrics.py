@@ -52,6 +52,8 @@ def _build_periodic_returns_from_equity(
     if tmp.empty:
         return pd.Series(dtype=float), "equity curve contains only non-finite values"
 
+    tmp["timestamp"] = pd.to_datetime(tmp["timestamp"], errors="coerce")
+    tmp = tmp.dropna(subset=["timestamp"])
     tmp = tmp.sort_values("timestamp").set_index("timestamp")
     if len(tmp) < 2:
         return pd.Series(dtype=float), "equity curve has fewer than 2 points"
