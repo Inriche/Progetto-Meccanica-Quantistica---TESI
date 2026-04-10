@@ -52,7 +52,6 @@ def _build_periodic_returns_from_equity(
     if tmp.empty:
         return pd.Series(dtype=float), "equity curve contains only non-finite values"
 
-    tmp["timestamp"] = pd.to_datetime(tmp["timestamp"], errors="coerce")
     tmp = tmp.dropna(subset=["timestamp"])
     tmp = tmp.sort_values("timestamp").set_index("timestamp")
     if len(tmp) < 2:
@@ -88,7 +87,7 @@ def _compute_sharpe(returns: pd.Series, annualization_factor: float = 1.0) -> fl
     if returns.empty:
         return 0.0
     std = float(returns.std(ddof=1))
-    if std <= 0:
+    if not math.isfinite(std) or std <= 0:
         return 0.0
     return float((returns.mean() / std) * annualization_factor)
 
@@ -100,7 +99,7 @@ def _compute_sortino(returns: pd.Series, annualization_factor: float = 1.0) -> f
     if downside.empty:
         return float("inf") if float(returns.mean()) > 0 else 0.0
     downside_std = float(downside.std(ddof=1))
-    if downside_std <= 0:
+    if not math.isfinite(downside_std) or downside_std <= 0:
         return 0.0
     return float((returns.mean() / downside_std) * annualization_factor)
 
