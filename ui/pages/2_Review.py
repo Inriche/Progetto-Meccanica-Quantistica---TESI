@@ -32,7 +32,8 @@ if events.empty:
     st.warning("No events found yet.")
     st.stop()
 
-events["label"] = (
+events = events.copy()
+events.loc[:, "label"] = (
     events["id"].astype(str)
     + " | "
     + events["timestamp"].astype(str)

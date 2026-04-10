@@ -141,8 +141,8 @@ def load_recent_candles(limit=200):
     if df.empty:
         return df
 
-    df = df.sort_values("open_time")
-    df["time"] = pd.to_datetime(df["open_time"], unit="ms")
+    df = df.sort_values("open_time").copy()
+    df.loc[:, "time"] = pd.to_datetime(df["open_time"], unit="ms")
     return df
 
 
@@ -336,7 +336,11 @@ if latest_alert is not None:
         """
     )
 
-completed_reads = market_read_df[market_read_df["validation_status"].isin(["validated", "invalidated", "mixed"])] if not market_read_df.empty else pd.DataFrame()
+completed_reads = (
+    market_read_df[market_read_df["validation_status"].isin(["validated", "invalidated", "mixed"])].copy()
+    if not market_read_df.empty
+    else pd.DataFrame()
+)
 if not completed_reads.empty:
     latest_read = completed_reads.iloc[0]
     st.markdown(

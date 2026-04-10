@@ -195,7 +195,8 @@ def load_candles_around_event(
     if df.empty:
         return df
 
-    df["time"] = pd.to_datetime(df["open_time"], unit="ms")
+    df = df.copy()
+    df.loc[:, "time"] = pd.to_datetime(df["open_time"], unit="ms")
     return df
 
 def split_why_reasons(why_text: Optional[str]) -> list[str]:

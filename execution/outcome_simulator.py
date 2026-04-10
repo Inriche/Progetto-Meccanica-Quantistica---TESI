@@ -40,7 +40,8 @@ def load_future_candles_after_timestamp(
     if df.empty:
         return df
 
-    df["time"] = pd.to_datetime(df["open_time"], unit="ms")
+    df = df.copy()
+    df.loc[:, "time"] = pd.to_datetime(df["open_time"], unit="ms")
     return df
 
 
