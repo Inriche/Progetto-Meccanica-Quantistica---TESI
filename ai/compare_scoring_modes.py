@@ -81,20 +81,23 @@ def _apply_mode_scores(
     artifact: Optional[dict[str, Any]],
 ) -> pd.DataFrame:
     out = base_df.copy()
-    out.loc[:, "score"] = pd.to_numeric(out.get("score"), errors="coerce").fillna(0.0)
+    base_score = out["score"] if "score" in out.columns else pd.Series(0.0, index=out.index, dtype="float64")
+    out.loc[:, "score"] = pd.to_numeric(base_score, errors="coerce").fillna(0.0).astype("float64")
+    out = out.astype({"score": "float64"}, copy=False)
     out.loc[:, "ml_probability"] = _predict_positive_probability(out, artifact)
-    out.loc[:, "ml_score"] = pd.to_numeric(out["ml_probability"], errors="coerce") * 100.0
+    out.loc[:, "ml_score"] = pd.to_numeric(out["ml_probability"], errors="coerce").astype(float) * 100.0
 
     if mode == "heuristic":
         return out
 
     if mode == "ml":
-        out.loc[:, "score"] = out["ml_score"].where(out["ml_score"].notna(), out["score"])
+        ml_score = pd.to_numeric(out["ml_score"], errors="coerce").astype("float64")
+        out.loc[:, "score"] = ml_score.where(ml_score.notna(), out["score"]).astype("float64")
         return out
 
     # hybrid: blend heuristic score with ML score when available.
-    hybrid_score = (0.65 * out["score"]) + (0.35 * out["ml_score"])
-    out.loc[:, "score"] = hybrid_score.where(out["ml_score"].notna(), out["score"])
+    hybrid_score = ((0.65 * out["score"]) + (0.35 * out["ml_score"])).astype("float64")
+    out.loc[:, "score"] = hybrid_score.where(out["ml_score"].notna(), out["score"]).astype("float64")
     return out
 
 
@@ -104,6 +107,21 @@ def _apply_score_threshold(df: pd.DataFrame, min_score: Optional[float]) -> pd.D
     out = df.copy()
     out = out[pd.to_numeric(out["score"], errors="coerce") >= float(min_score)].copy()
     return out
+
+
+def _parse_min_scores_arg(value: Optional[str]) -> list[Optional[float]]:
+    if value is None:
+        return []
+    parts = [p.strip() for p in str(value).split(",")]
+    scores: list[Optional[float]] = []
+    for p in parts:
+        if not p:
+            continue
+        try:
+            scores.append(float(p))
+        except Exception:
+            continue
+    return scores
 
 
 def _filter_test_period(df: pd.DataFrame, *, test_start: pd.Timestamp, test_end: pd.Timestamp) -> pd.DataFrame:
@@ -128,6 +146,7 @@ def compare_scoring_modes(
     output_csv: str,
     output_json: str,
     min_score: Optional[float],
+    min_scores: Optional[list[Optional[float]]] = None,
     timeframe: str,
     horizon_bars: int,
     initial_capital: float,
@@ -165,49 +184,57 @@ def compare_scoring_modes(
     )
 
     base_inputs = load_historical_inputs(base_config)
+    print(f"[compare_scoring_modes] loaded_historical_inputs={len(base_inputs)}")
     base_inputs = _filter_test_period(base_inputs, test_start=start_ts, test_end=end_ts)
+    print(f"[compare_scoring_modes] after_test_period_filter={len(base_inputs)}")
 
     artifact = _load_model_artifact(model_path)
     rows: list[dict[str, Any]] = []
+    thresholds = [s for s in (min_scores or [min_score])]
+    if not thresholds:
+        thresholds = [None]
 
-    for mode in MODES:
-        mode_inputs = _apply_mode_scores(base_inputs, mode=mode, artifact=artifact)
-        mode_inputs = _apply_score_threshold(mode_inputs, min_score=min_score)
-        result = run_backtest(
-            base_config,
-            inputs_df=mode_inputs,
-            start_ts=start_ts,
-            end_ts=end_ts,
-        )
-        m = result.metrics
-        rows.append(
-            {
-                "mode": mode,
-                "test_start": start_ts.isoformat(),
-                "test_end": end_ts.isoformat(),
-                "symbol": symbol,
-                "initial_capital": float(shared_portfolio.initial_capital),
-                "risk_per_trade": float(shared_portfolio.risk_per_trade),
-                "max_notional_fraction": float(shared_portfolio.max_notional_fraction),
-                "fee_rate": float(shared_portfolio.fee_rate),
-                "slippage_bps": float(shared_portfolio.slippage_bps),
-                "horizon_bars": int(horizon_bars),
-                "timeframe": timeframe,
-                "min_score": min_score,
-                "signals_considered": int(len(mode_inputs)),
-                "trades": int(m.trades),
-                "total_return": float(m.total_return),
-                "win_rate": float(m.win_rate),
-                "profit_factor": float(m.profit_factor),
-                "expectancy": float(m.expectancy),
-                "max_drawdown": float(m.max_drawdown),
-                "sharpe_ratio": float(m.sharpe_ratio),
-                "sortino_ratio": float(m.sortino_ratio),
-                "p_value": m.p_value,
-                "buy_hold_return": m.buy_hold_return,
-                "outperformance_vs_benchmark": m.outperformance_vs_benchmark,
-            }
-        )
+    for threshold in thresholds:
+        for mode in MODES:
+            mode_inputs = _apply_mode_scores(base_inputs, mode=mode, artifact=artifact)
+            print(f"[compare_scoring_modes] threshold={threshold} mode={mode} after_mode_score={len(mode_inputs)}")
+            mode_inputs = _apply_score_threshold(mode_inputs, min_score=threshold)
+            print(f"[compare_scoring_modes] threshold={threshold} mode={mode} after_score_threshold={len(mode_inputs)}")
+            result = run_backtest(
+                base_config,
+                inputs_df=mode_inputs,
+                start_ts=start_ts,
+                end_ts=end_ts,
+            )
+            m = result.metrics
+            rows.append(
+                {
+                    "mode": mode,
+                    "test_start": start_ts.isoformat(),
+                    "test_end": end_ts.isoformat(),
+                    "symbol": symbol,
+                    "initial_capital": float(shared_portfolio.initial_capital),
+                    "risk_per_trade": float(shared_portfolio.risk_per_trade),
+                    "max_notional_fraction": float(shared_portfolio.max_notional_fraction),
+                    "fee_rate": float(shared_portfolio.fee_rate),
+                    "slippage_bps": float(shared_portfolio.slippage_bps),
+                    "horizon_bars": int(horizon_bars),
+                    "timeframe": timeframe,
+                    "min_score": threshold,
+                    "signals_considered": int(len(mode_inputs)),
+                    "trades": int(m.trades),
+                    "total_return": float(m.total_return),
+                    "win_rate": float(m.win_rate),
+                    "profit_factor": float(m.profit_factor),
+                    "expectancy": float(m.expectancy),
+                    "max_drawdown": float(m.max_drawdown),
+                    "sharpe_ratio": float(m.sharpe_ratio),
+                    "sortino_ratio": float(m.sortino_ratio),
+                    "p_value": m.p_value,
+                    "buy_hold_return": m.buy_hold_return,
+                    "outperformance_vs_benchmark": m.outperformance_vs_benchmark,
+                }
+            )
 
     out_df = pd.DataFrame(rows)
     os.makedirs(os.path.dirname(output_csv) or ".", exist_ok=True)
@@ -228,6 +255,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--output-csv", default=DEFAULT_OUTPUT_CSV)
     parser.add_argument("--output-json", default=DEFAULT_OUTPUT_JSON)
     parser.add_argument("--min-score", type=float, default=70.0)
+    parser.add_argument("--min-scores", default=None, help="Comma-separated score thresholds, e.g. 40,50,60,70")
     parser.add_argument("--timeframe", default="15m")
     parser.add_argument("--horizon-bars", type=int, default=24)
     parser.add_argument("--initial-capital", type=float, default=10_000.0)
@@ -240,6 +268,7 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
+    min_scores = _parse_min_scores_arg(args.min_scores)
     out_df = compare_scoring_modes(
         db_path=str(args.db_path),
         symbol=None if args.symbol in (None, "", "None") else str(args.symbol),
@@ -250,6 +279,7 @@ def main() -> None:
         output_csv=str(args.output_csv),
         output_json=str(args.output_json),
         min_score=None if args.min_score is None else float(args.min_score),
+        min_scores=min_scores if min_scores else None,
         timeframe=str(args.timeframe),
         horizon_bars=int(args.horizon_bars),
         initial_capital=float(args.initial_capital),

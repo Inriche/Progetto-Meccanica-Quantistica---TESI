@@ -62,7 +62,6 @@ def _load_signal_feature_rows(db_path: str, limit: Optional[int] = None) -> pd.D
             s.ticket_path
         FROM signals s
         WHERE s.event_type = 'signal'
-          AND s.decision IN ('BUY', 'SELL')
         ORDER BY s.id ASC
     """
 
@@ -80,8 +79,26 @@ def _load_signal_feature_rows(db_path: str, limit: Optional[int] = None) -> pd.D
     if df.empty:
         return df
 
-    # Keep one row per signal in case of duplicated decision-log joins.
+    # signals is the source of truth for point-in-time features.
     return df.drop_duplicates(subset=["signal_id"], keep="first").reset_index(drop=True)
+
+
+def _infer_decision(row: dict[str, Any]) -> Optional[str]:
+    decision = str(row.get("decision", "")).upper().strip()
+    if decision in ("BUY", "SELL"):
+        return decision
+    try:
+        entry = float(row.get("entry"))
+        tp1 = float(row.get("tp1"))
+    except Exception:
+        return None
+    if entry <= 0:
+        return None
+    if tp1 > entry:
+        return "BUY"
+    if tp1 < entry:
+        return "SELL"
+    return None
 
 
 def _derive_label(validation_status: str, outcome_status: str) -> Optional[int]:
@@ -110,8 +127,10 @@ def _label_rows(
         return raw_df.copy()
 
     labeled_rows: list[dict[str, Any]] = []
+    unlabeled_reasons: dict[str, int] = {}
 
     for row in raw_df.to_dict("records"):
+        row["decision"] = _infer_decision(row)
         validation = market_read.evaluate_market_read(
             row,
             horizon_bars=horizon_bars,
@@ -126,9 +145,14 @@ def _label_rows(
         row["label_status"] = "labeled" if label is not None else "unlabeled"
         row["validation_status"] = validation_status
         row["outcome_status"] = outcome_status
+        if label is None:
+            reason_key = f"{validation_status}|{outcome_status}"
+            unlabeled_reasons[reason_key] = unlabeled_reasons.get(reason_key, 0) + 1
         labeled_rows.append(row)
 
-    return pd.DataFrame(labeled_rows)
+    out_df = pd.DataFrame(labeled_rows)
+    out_df.attrs["unlabeled_reasons"] = unlabeled_reasons
+    return out_df
 
 
 def build_training_dataset(
@@ -144,12 +168,23 @@ def build_training_dataset(
 ) -> pd.DataFrame:
     _configure_validation_db_path(db_path)
     raw_df = _load_signal_feature_rows(db_path=db_path, limit=limit)
+    print(f"[dataset_builder] loaded_signals={len(raw_df)}")
+
     labeled_df = _label_rows(
         raw_df,
         horizon_bars=horizon_bars,
         min_follow_through_pct=min_follow_through_pct,
         max_adverse_pct=max_adverse_pct,
     )
+    unlabeled_reasons = labeled_df.attrs.get("unlabeled_reasons", {})
+    print(
+        f"[dataset_builder] labeled_candidates={len(labeled_df)} "
+        f"deterministic_labels={int(pd.to_numeric(labeled_df.get('label'), errors='coerce').notna().sum()) if not labeled_df.empty else 0} "
+        f"discarded={int(pd.to_numeric(labeled_df.get('label'), errors='coerce').isna().sum()) if not labeled_df.empty else 0}"
+    )
+    if unlabeled_reasons:
+        top_reason, top_count = max(unlabeled_reasons.items(), key=lambda x: x[1])
+        print(f"[dataset_builder] top_discard_reason={top_reason} count={top_count}")
 
     if labeled_df.empty:
         os.makedirs(os.path.dirname(output_csv_path) or ".", exist_ok=True)

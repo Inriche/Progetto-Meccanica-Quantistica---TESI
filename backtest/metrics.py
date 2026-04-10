@@ -42,18 +42,22 @@ def _build_periodic_returns_from_equity(
         return pd.Series(dtype=float), "equity curve unavailable"
 
     tmp = equity_curve_df.copy()
-    tmp["timestamp"] = pd.to_datetime(tmp["timestamp"], errors="coerce")
-    tmp["equity"] = pd.to_numeric(tmp["equity"], errors="coerce")
-    tmp = tmp.dropna(subset=["timestamp", "equity"])
+    tmp = tmp.assign(
+        timestamp=pd.to_datetime(tmp["timestamp"], utc=True, errors="coerce"),
+        equity=pd.to_numeric(tmp["equity"], errors="coerce"),
+    )
+    tmp = tmp.dropna(subset=["timestamp", "equity"]).copy()
     if tmp.empty:
         return pd.Series(dtype=float), "equity curve has no valid timestamp/equity pairs"
 
-    tmp = tmp[tmp["equity"].apply(lambda v: math.isfinite(float(v)))]
+    tmp = tmp[tmp["equity"].apply(lambda v: math.isfinite(float(v)))].copy()
     if tmp.empty:
         return pd.Series(dtype=float), "equity curve contains only non-finite values"
 
-    tmp = tmp.dropna(subset=["timestamp"])
-    tmp = tmp.sort_values("timestamp").set_index("timestamp")
+    tmp = tmp.dropna(subset=["timestamp"]).copy()
+    tmp = tmp.sort_values("timestamp").copy()
+    tmp = tmp.set_index(pd.DatetimeIndex(tmp["timestamp"].to_numpy(), name="timestamp"))
+    tmp = tmp.drop(columns=["timestamp"])
     if len(tmp) < 2:
         return pd.Series(dtype=float), "equity curve has fewer than 2 points"
 

@@ -111,7 +111,7 @@ def _normalize_inputs(df: pd.DataFrame, config: BacktestConfig) -> pd.DataFrame:
         return df
 
     out = df.copy()
-    out["decision"] = [
+    out.loc[:, "decision"] = [
         _infer_decision(row)
         for row in out.to_dict("records")
     ]
@@ -149,9 +149,7 @@ def load_historical_inputs(config: BacktestConfig) -> pd.DataFrame:
         where.append("UPPER(symbol) = ?")
         params.append(str(config.symbol).upper())
 
-    if config.input_mode == "signals":
-        where.append("decision IN ('BUY', 'SELL')")
-    else:
+    if config.input_mode != "signals":
         where.append("score IS NOT NULL")
 
     query = f"""
@@ -210,7 +208,8 @@ def _load_future_candles(
     if df.empty:
         return df
 
-    df["time"] = pd.to_datetime(df["open_time"], unit="ms")
+    df = df.copy()
+    df.loc[:, "time"] = pd.to_datetime(df["open_time"], unit="ms")
     return df
 
 
