@@ -177,9 +177,24 @@ class TradingEngine:
             )
             if hist.empty:
                 return base_df.copy()
-            hist = hist.sort_values("open_time").drop_duplicates(subset=["open_time"], keep="last")
-            return hist.copy()
-        except Exception:
+
+            merged = pd.concat([hist, base_df], ignore_index=True)
+            if "open_time" not in merged.columns:
+                return base_df.copy()
+            merged = (
+                merged.sort_values("open_time")
+                .drop_duplicates(subset=["open_time"], keep="last")
+                .tail(int(min_rows))
+                .copy()
+            )
+            return merged
+        except Exception as ex:
+            self.logger.warning(
+                "[Pipeline] quantum_frame_db_fallback_failed timeframe=%s symbol=%s err=%s",
+                timeframe,
+                self.symbol,
+                ex,
+            )
             return base_df.copy()
 
     async def run_cycle(self, trigger: str) -> EngineCycleResult:
