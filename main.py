@@ -9,6 +9,7 @@ from config import CONFIG
 
 from runtime.runtime_config import load_runtime_config
 from runtime.alert_engine import emit_alert
+from engine.pipeline import TradingEngine
 
 from database.db import DB
 from data.data_store import DataStore, Candle
@@ -117,6 +118,17 @@ async def main():
             cfg["cooldown_minutes"],
         )
     
+    trading_engine = TradingEngine(
+        symbol=CONFIG.symbol,
+        store=store,
+        orderbook_store=ob,
+        db=db,
+        risk_governor=risk,
+        runtime_config_loader=load_runtime_config,
+        snapshot_dir=CONFIG.snapshot_dir,
+        ticket_dir=CONFIG.ticket_dir,
+        timezone=ROME_TZ,
+    )
 
 
     async def on_depth(bids, asks):
@@ -423,547 +435,15 @@ async def main():
             )
 
     async def analyze_and_emit(trigger: str):
-        runtime_cfg = load_runtime_config()
-        sync_risk_governor(runtime_cfg)
-        strategy_profile = get_strategy_profile(str(runtime_cfg.get("strategy_mode", "BALANCED")))
-
-        df_m15 = store.to_df("15m")
-        df_h1 = store.to_df("1h")
-        df_h4 = store.to_df("4h")
-
-        if not has_min_history(df_m15, df_h1, df_h4):
-            print(
-                f"[ANALYZE:{trigger}] warming up... "
-                f"(m15={len(df_m15)} h1={len(df_h1)} h4={len(df_h4)})"
-            )
-            return
-
-        b_h1 = detect_bias_h1(df_h1)
-        b_h4 = detect_bias_h4(df_h4)
-        b_comb = combined_bias(b_h1, b_h4)
-        vol = volatility_regime(df_m15)
-        ctx = classify_market_context(df_m15, df_h1, df_h4)
-        quantum = build_quantum_state(df_m15, df_h1, df_h4)
-
-        liq_data = fetch_liquidation_map("BTC")
-        top_liq = None
-        if liq_data and liq_data.get("clusters"):
-            top_liq = liq_data["clusters"][0]["price"]
-
-        latest_price = float(df_m15["close"].iloc[-1]) if not df_m15.empty else None
-        squeeze_risk = squeeze_risk_label_from_prices(
-            latest_price,
-            top_liq,
-            high_pct=float(runtime_cfg["squeeze_risk_high_pct"]),
-            medium_pct=float(runtime_cfg["squeeze_risk_medium_pct"]),
-        )
-
-        deriv = build_derivatives_context(CONFIG.symbol)
-        funding_rate = deriv.get("funding_rate")
-        oi_now = deriv.get("open_interest_now")
-        oi_change_pct = deriv.get("open_interest_change_pct_15m")
-        crowding = deriv.get("crowding")
-        news = build_news_context(
-            symbol=CONFIG.symbol,
-            limit=int(runtime_cfg.get("news_headline_limit", 6)),
-            cache_minutes=int(runtime_cfg.get("news_cache_minutes", 15)),
-            enabled=bool(runtime_cfg.get("news_enabled", True)),
-        )
-
-        now = datetime.now(ROME_TZ)
-        risk_status_before_emit = risk.status_snapshot(now)
-
-        setup_res = select_setup_candidate(
-            df_m15,
-            df_h1,
-            df_h4,
-            b_comb,
-            strategy_profile.code,
-        )
-
-        decision = "FLAT"
-        entry = sl = tp1 = tp2 = None
-        setup_name = "NONE"
-        reasons = ["No valid setup passed filters."]
-        snapshot_path = ""
-
-        score = 0
-        grade = "C"
-        components = []
-
-        imb = ob.imbalance(top_n=10)
-        raw_imb = ob.raw_imbalance(top_n=10)
-        imb_age = ob.age_ms()
-
-        rr_est = None
-        base_score = 0
-        base_components = []
-        ob_pts = 0
-        conf_pts = 0
-        deriv_pts = 0
-        quant_pts = 0
-        news_pts = 0
-        strategy_pts = 0
-        strategy_reasons = []
-
-        if setup_res is not None:
-            entry = setup_res.entry
-            sl = setup_res.sl
-            tp1 = setup_res.tp1
-            tp2 = setup_res.tp2
-
-            rr_est = rr(entry, sl, tp1)
-
-            breakdown = compute_score(
-                bias_h1=b_h1,
-                bias_h4=b_h4,
-                combined=b_comb,
-                rr_est=rr_est,
-                volatility=vol,
-                setup_name=setup_res.setup,
-                context=ctx,
-            )
-
-            base_score = breakdown.score
-            base_components = breakdown.components
-
-            if imb is not None and imb_age is not None and imb_age <= 2000:
-                ob_pts = orderbook_points(setup_res.decision, imb, runtime_cfg)
-
-            conf_pts = confluence_points(entry, setup_res.decision, df_h1)
-
-            deriv_pts = derivatives_points(
-                funding_rate=funding_rate,
-                oi_change_pct=oi_change_pct,
-                crowding=crowding,
-                decision=setup_res.decision,
-                extreme_oi_pct=float(runtime_cfg["derivatives_extreme_oi_pct"]),
-                mild_oi_pct=float(runtime_cfg["derivatives_mild_oi_pct"]),
-            )
-
-            quant_pts = quantum_points(
-                quantum=quantum,
-                decision=setup_res.decision,
-                coherence_threshold=float(runtime_cfg["quantum_coherence_threshold"]),
-                tunneling_threshold=float(runtime_cfg["quantum_tunneling_threshold"]),
-            )
-
-            news_pts = news_points(
-                news=news,
-                decision=setup_res.decision,
-                enabled=bool(runtime_cfg.get("news_enabled", True)),
-            )
-
-            strategy_pts, strategy_reasons = strategy_points(
-                profile=strategy_profile,
-                setup_name=setup_res.setup,
-                decision=setup_res.decision,
-                context=ctx,
-                squeeze_risk=squeeze_risk,
-                latest_price=latest_price,
-                liquidation_cluster=top_liq,
-                quantum_coherence=float(quantum.coherence),
-                quantum_tunneling=float(quantum.tunneling_probability),
-                quantum_phase_bias=float(quantum.phase_bias),
-                news_sentiment=float(news.sentiment_score),
-                news_impact=float(news.impact_score),
-            )
-
-            score = max(
-                0,
-                min(100, base_score + ob_pts + conf_pts + deriv_pts + quant_pts + news_pts + strategy_pts),
-            )
-            grade = "A" if score >= 80 else ("B" if score >= 70 else "C")
-            components = base_components + [
-                ("orderbook_imbalance", ob_pts),
-                ("h1_confluence", conf_pts),
-                ("derivatives_context", deriv_pts),
-                ("quantum_context", quant_pts),
-                ("news_context", news_pts),
-                ("strategy_context", strategy_pts),
-            ]
-
-            passes_rr = rr_est >= runtime_cfg["rr_min"]
-            passes_score = score >= runtime_cfg["min_score_for_signal"]
-            passes_risk = risk_status_before_emit["can_emit"]
-
-            if passes_rr and passes_score and passes_risk:
-                decision = setup_res.decision
-                setup_name = setup_res.setup
-
-                reasons = setup_res.reasons.copy()
-
-                if imb is None:
-                    reasons.append("OrderBook: N/A")
-                else:
-                    reasons.append(
-                        f"OrderBook imbalance_avg={imb:.3f} raw={raw_imb:.3f} age_ms={imb_age}"
-                    )
-
-                reasons.append(f"H1 confluence points={conf_pts}")
-                reasons.append(f"derivatives points={deriv_pts}")
-                reasons.append(f"news_bias={news.bias} sentiment={news.sentiment_score:.2f} impact={news.impact_score:.2f} points={news_pts}")
-                reasons.append(f"strategy_mode={strategy_profile.code} strategy_points={strategy_pts}")
-                reasons.append(f"quantum_state={quantum.state}")
-                reasons.append(
-                    "quantum "
-                    f"coherence={quantum.coherence:.2f} "
-                    f"phase_bias={quantum.phase_bias:.2f} "
-                    f"interference={quantum.interference:.2f} "
-                    f"tunneling={quantum.tunneling_probability:.2f} "
-                    f"points={quant_pts}"
-                )
-                reasons.append(f"context={ctx}")
-                reasons.append(f"squeeze_risk={squeeze_risk}")
-
-                if top_liq is not None:
-                    reasons.append(f"nearest_liquidation_cluster={top_liq}")
-
-                if funding_rate is not None:
-                    reasons.append(f"funding_rate={funding_rate}")
-
-                if oi_now is not None:
-                    reasons.append(f"oi_now={oi_now}")
-
-                if oi_change_pct is not None:
-                    reasons.append(f"oi_change_pct_15m={oi_change_pct}")
-
-                if crowding is not None:
-                    reasons.append(f"crowding={crowding}")
-
-                for strategy_reason in strategy_reasons:
-                    reasons.append(f"strategy_note={strategy_reason}")
-
-                if news.headlines:
-                    reasons.append(f"news_topic={news.dominant_topic}")
-
-            else:
-                setup_name = "BLOCKED"
-                decision = "FLAT"
-
-                reasons = [
-                    f"Setup found ({setup_res.setup}) but blocked by filters.",
-                    f"RR_est={rr_est:.2f} (min {runtime_cfg['rr_min']})",
-                    (
-                        f"score={score} (min {runtime_cfg['min_score_for_signal']}) "
-                        f"base={base_score} ob_pts={ob_pts} conf_pts={conf_pts} deriv_pts={deriv_pts} "
-                        f"quant_pts={quant_pts} news_pts={news_pts} strategy_pts={strategy_pts}"
-                    ),
-                    f"vol={vol}, combined_bias={b_comb}, context={ctx}",
-                    (
-                        f"news bias={news.bias} sentiment={news.sentiment_score:.2f} "
-                        f"impact={news.impact_score:.2f}"
-                    ),
-                    f"strategy_mode={strategy_profile.code}",
-                    (
-                        "quantum "
-                        f"state={quantum.state} "
-                        f"coherence={quantum.coherence:.2f} "
-                        f"phase_bias={quantum.phase_bias:.2f} "
-                        f"interference={quantum.interference:.2f} "
-                        f"tunneling={quantum.tunneling_probability:.2f}"
-                    ),
-                    (
-                        f"Risk: can_emit={passes_risk} "
-                        f"block_reason={risk_status_before_emit['block_reason']} "
-                        f"signals_today={risk_status_before_emit['signals_today']}/"
-                        f"{risk_status_before_emit['max_signals_per_day']} "
-                        f"cooldown_remaining_minutes={risk_status_before_emit['cooldown_remaining_minutes']} "
-                        f"Trigger={trigger}"
-                    ),
-                ]
-
-                if imb is None:
-                    reasons.append("OrderBook: N/A")
-                else:
-                    reasons.append(
-                        f"OrderBook imbalance_avg={imb:.3f} raw={raw_imb:.3f} age_ms={imb_age}"
-                    )
-
-                reasons.append(f"squeeze_risk={squeeze_risk}")
-
-                if top_liq is not None:
-                    reasons.append(f"nearest_liquidation_cluster={top_liq}")
-
-                if funding_rate is not None:
-                    reasons.append(f"funding_rate={funding_rate}")
-
-                if oi_now is not None:
-                    reasons.append(f"oi_now={oi_now}")
-
-                if oi_change_pct is not None:
-                    reasons.append(f"oi_change_pct_15m={oi_change_pct}")
-
-                if crowding is not None:
-                    reasons.append(f"crowding={crowding}")
-
-                for strategy_reason in strategy_reasons:
-                    reasons.append(f"strategy_note={strategy_reason}")
-
-        if decision == "FLAT" and setup_name == "NONE":
-            setup_info, setup_why = quick_setup_status(
-                df_m15,
-                df_h1,
-                df_h4,
-                float(runtime_cfg["rr_min"]),
-                strategy_profile.code,
-            )
-            action = suggest_action(ctx, setup_info, setup_why, b_comb, squeeze_risk=squeeze_risk)
-            why_text = f"{setup_why}; squeeze_risk={squeeze_risk}"
-            why_text += (
-                f"; strategy_mode={strategy_profile.code}"
-                f"; news_bias={news.bias}"
-                f"; news_sentiment={news.sentiment_score:.2f}"
-                f"; news_impact={news.impact_score:.2f}"
-                f"; quantum_state={quantum.state}"
-                f"; quantum_coherence={quantum.coherence:.2f}"
-                f"; quantum_phase_bias={quantum.phase_bias:.2f}"
-                f"; quantum_tunneling={quantum.tunneling_probability:.2f}"
-            )
-
-            save_status_event(
-                event_type="status",
-                decision="FLAT",
-                setup="NONE",
-                context=ctx,
-                action=action,
-                why=why_text,
-                entry=None,
-                sl=None,
-                tp1=None,
-                tp2=None,
-                rr_estimated=None,
-                score=0,
-                ob_imbalance=imb,
-                ob_raw=raw_imb,
-                ob_age_ms=imb_age,
-                funding_rate=funding_rate,
-                oi_now=oi_now,
-                oi_change_pct=oi_change_pct,
-                crowding=crowding,
-                strategy_mode=strategy_profile.code,
-                strategy_score=0,
-                news_bias=news.bias,
-                news_sentiment=news.sentiment_score,
-                news_impact=news.impact_score,
-                news_score=0,
-                quantum_state=quantum.state,
-                quantum_coherence=quantum.coherence,
-                quantum_phase_bias=quantum.phase_bias,
-                quantum_interference=quantum.interference,
-                quantum_tunneling=quantum.tunneling_probability,
-                quantum_score=0,
-            )
-
-            maybe_emit_news_regime_alert(
-                now=now,
-                runtime_cfg=runtime_cfg,
-                news=news,
-                context=ctx,
-                action=action,
-                strategy_code=strategy_profile.code,
-                trigger=trigger,
-            )
-
-            print(f"[ANALYZE:{trigger}] FLAT (no setup)")
-            return
-
-        action = suggest_action(
-            ctx,
-            setup_name,
-            "; ".join(reasons),
-            b_comb,
-            squeeze_risk=squeeze_risk
-        )
-
-        if not any(str(r).startswith("squeeze_risk=") for r in reasons):
-            reasons.append(f"squeeze_risk={squeeze_risk}")
-
-        reasons.append(f"action={action}")
-
-        if decision != "FLAT":
-            risk.mark_emitted(now)
-            risk_status_after_emit = risk.status_snapshot(now)
-
-            snapshot_path = save_snapshot(
-                df_m15,
-                CONFIG.snapshot_dir,
-                CONFIG.symbol,
-                now,
-                entry,
-                sl,
-                tp1,
-                tp2,
-            )
-        else:
-            risk_status_after_emit = risk_status_before_emit
-
-        why_text = "; ".join(reasons)
-
-        event_snapshot = {
-            "price": latest_price,
-            "context": ctx,
-            "action": action,
-            "squeeze_risk": squeeze_risk,
-            "orderbook": {
-                "imbalance_avg": imb,
-                "raw": raw_imb,
-                "age_ms": imb_age,
-            },
-            "derivatives": {
-                "funding_rate": funding_rate,
-                "oi_now": oi_now,
-                "oi_change_pct_15m": oi_change_pct,
-                "crowding": crowding,
-            },
-            "strategy": {
-                "mode": strategy_profile.code,
-                "label": strategy_profile.label,
-                "description": strategy_profile.description,
-                "points": strategy_pts,
-                "notes": strategy_reasons,
-            },
-            "news": news.to_dict(),
-            "quantum": {
-                "state": quantum.state,
-                "coherence": quantum.coherence,
-                "phase_bias": quantum.phase_bias,
-                "interference": quantum.interference,
-                "tunneling_probability": quantum.tunneling_probability,
-                "amplitude": quantum.amplitude,
-                "state_confidence": quantum.state_confidence,
-                "points": quant_pts,
-            },
-            "liquidity": {
-                "nearest_liquidation_cluster": top_liq,
-            },
-            "risk": risk_status_after_emit,
-        }
-
-        ticket = build_ticket(
-            symbol=CONFIG.symbol,
-            timestamp=now,
-            decision=decision,
-            setup=setup_name,
-            bias_h1=b_h1,
-            bias_h4=b_h4,
-            combined_bias=b_comb,
-            volatility=vol,
-            entry=entry,
-            sl=sl,
-            tp1=tp1,
-            tp2=tp2,
-            score=score,
-            grade=grade,
-            components=components,
-            reasons=[f"Trigger={trigger}"] + reasons,
-            snapshot_path=snapshot_path,
-            rr_min_required=runtime_cfg["rr_min"],
-            min_score_for_signal=runtime_cfg["min_score_for_signal"],
-            max_signals_per_day=runtime_cfg["max_signals_per_day"],
-            cooldown_minutes=runtime_cfg["cooldown_minutes"],
-            context=ctx,
-            action=action,
-            liquidation_cluster=top_liq,
-            strategy_snapshot=event_snapshot["strategy"],
-            news_snapshot=event_snapshot["news"],
-            quantum_snapshot=event_snapshot["quantum"],
-            event_snapshot=event_snapshot,
-            risk_gate_status=risk_status_after_emit,
-        )
-
-        ticket_path = ticket.save(CONFIG.ticket_dir)
-
-        db.insert_signal(
-            {
-                "signal_id": ticket.payload["id"],
-                "timestamp": ticket.payload["timestamp"],
-                "symbol": ticket.payload["symbol"],
-                "event_type": "signal",
-                "decision": decision,
-                "setup": setup_name,
-                "context": ctx,
-                "action": action,
-                "why": why_text,
-                "entry": entry,
-                "sl": sl,
-                "tp1": tp1,
-                "tp2": tp2,
-                "rr_estimated": rr_est,
-                "score": score,
-                "ob_imbalance": imb,
-                "ob_raw": raw_imb,
-                "ob_age_ms": imb_age,
-                "funding_rate": funding_rate,
-                "oi_now": oi_now,
-                "oi_change_pct": oi_change_pct,
-                "crowding": crowding,
-                "strategy_mode": strategy_profile.code,
-                "strategy_score": strategy_pts,
-                "news_bias": news.bias,
-                "news_sentiment": news.sentiment_score,
-                "news_impact": news.impact_score,
-                "news_score": news_pts,
-                "quantum_state": quantum.state,
-                "quantum_coherence": quantum.coherence,
-                "quantum_phase_bias": quantum.phase_bias,
-                "quantum_interference": quantum.interference,
-                "quantum_tunneling": quantum.tunneling_probability,
-                "quantum_score": quant_pts,
-                "snapshot_path": snapshot_path,
-                "ticket_path": ticket_path,
-            }
-        )
-
-        maybe_emit_trade_alerts(
-            now=now,
-            runtime_cfg=runtime_cfg,
-            trigger=trigger,
-            ticket_id=ticket.payload["id"],
-            ticket_path=ticket_path,
-            decision=decision,
-            setup_name=setup_name,
-            action=action,
-            score=score,
-            rr_est=rr_est,
-            latest_price=latest_price,
-            strategy_profile=strategy_profile,
-            strategy_pts=strategy_pts,
-            news=news,
-            news_pts=news_pts,
-            quantum=quantum,
-            quant_pts=quant_pts,
-            context=ctx,
-            squeeze_risk=squeeze_risk,
-            risk_status=risk_status_after_emit,
-            why_text=why_text,
-        )
-
-        maybe_emit_news_regime_alert(
-            now=now,
-            runtime_cfg=runtime_cfg,
-            news=news,
-            context=ctx,
-            action=action,
-            strategy_code=strategy_profile.code,
-            trigger=trigger,
-        )
-
+        result = await trading_engine.run_cycle(trigger)
         print("=" * 90)
         print(
-            f"[ANALYZE:{trigger}] [{now.strftime('%Y-%m-%d %H:%M:%S')}] "
-            f"{ticket.payload['symbol']} -> {decision} | setup={setup_name} "
-            f"| score={score} ({grade}) | action={action}"
+            f"[PIPELINE:{trigger}] decision={result.decision} "
+            f"setup={result.setup} score={result.score} action={result.action} "
+            f"event_type={result.event_type}"
         )
-
-        if decision != "FLAT":
-            print(f"ENTRY={entry} SL={sl} TP1={tp1} TP2={tp2}")
-            print(f"Snapshot: {snapshot_path}")
-
-        print(f"Ticket:   {ticket_path}")
-        print("Reasons:")
-        for r in ticket.payload["evidence"]["key_reasons"]:
-            print(f" - {r}")
+        if result.ticket_path:
+            print(f"Ticket:   {result.ticket_path}")
 
     async def on_closed_kline(tf: str, k: dict):
         c = Candle.from_binance_kline(k)
@@ -1044,7 +524,7 @@ async def main():
             )
             risk_status = risk.status_snapshot(datetime.now(ROME_TZ))
 
-            setup_info, setup_why = quick_setup_status(
+            setup_info, setup_why = trading_engine.quick_setup_status(
                 df_m15,
                 df_h1,
                 df_h4,
@@ -1184,7 +664,7 @@ async def main():
                 medium_pct=float(runtime_cfg["squeeze_risk_medium_pct"]),
             )
 
-            setup_info, setup_why = quick_setup_status(
+            setup_info, setup_why = trading_engine.quick_setup_status(
                 df_m15,
                 df_h1,
                 df_h4,
@@ -1269,3 +749,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
