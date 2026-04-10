@@ -21,6 +21,7 @@ class DB:
             self.conn.executescript(f.read())
 
         self._migrate_signals_table()
+        self._migrate_cycle_logs_table()
         self.conn.commit()
 
     def _get_table_columns(self, table_name: str) -> List[str]:
@@ -80,6 +81,26 @@ class DB:
         for col_name, col_type in migrations:
             self._add_column_if_missing("signals", col_name, col_type)
 
+    def _migrate_cycle_logs_table(self) -> None:
+        existing_tables = self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='cycle_logs'"
+        ).fetchone()
+        if not existing_tables:
+            return
+
+        migrations = [
+            ("symbol", "TEXT"),
+            ("rr_estimated", "REAL"),
+            ("trigger", "TEXT"),
+            ("decision", "TEXT"),
+            ("setup", "TEXT"),
+            ("context", "TEXT"),
+            ("action", "TEXT"),
+            ("score", "REAL"),
+        ]
+        for col_name, col_type in migrations:
+            self._add_column_if_missing("cycle_logs", col_name, col_type)
+
     def insert_orderbook_snapshot(self, row: Dict[str, Any]) -> None:
         self.conn.execute(
             """
@@ -122,6 +143,27 @@ class DB:
                 row.get("action"),
                 row.get("score"),
                 row.get("ticket_path"),
+            ),
+        )
+        self.conn.commit()
+
+    def insert_cycle_log(self, row: Dict[str, Any]) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO cycle_logs
+            (timestamp, symbol, trigger, decision, setup, context, action, score, rr_estimated)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                row["timestamp"],
+                row["symbol"],
+                row.get("trigger"),
+                row.get("decision"),
+                row.get("setup"),
+                row.get("context"),
+                row.get("action"),
+                row.get("score"),
+                row.get("rr_estimated"),
             ),
         )
         self.conn.commit()

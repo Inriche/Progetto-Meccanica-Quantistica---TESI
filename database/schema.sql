@@ -86,3 +86,19 @@ CREATE TABLE IF NOT EXISTS decision_logs (
 
 CREATE INDEX IF NOT EXISTS idx_decision_logs_symbol_ts
 ON decision_logs(symbol, timestamp);
+
+CREATE TABLE IF NOT EXISTS cycle_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    trigger TEXT,
+    decision TEXT,
+    setup TEXT,
+    context TEXT,
+    action TEXT,
+    score REAL,
+    rr_estimated REAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_cycle_logs_symbol_ts
+ON cycle_logs(symbol, timestamp);

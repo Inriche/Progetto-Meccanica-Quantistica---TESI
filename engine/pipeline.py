@@ -115,6 +115,7 @@ class EngineCycleResult:
     event_type: str
     context: Optional[str]
     ticket_path: Optional[str]
+    rr_estimated: Optional[float]
     trigger: str
 
 
@@ -131,6 +132,8 @@ class TradingEngine:
         snapshot_dir: str,
         ticket_dir: str,
         timezone: Any,
+        time_provider: Optional[Callable[[], datetime]] = None,
+        enable_artifacts: bool = True,
     ) -> None:
         self.symbol = symbol
         self.store = store
@@ -141,7 +144,17 @@ class TradingEngine:
         self.snapshot_dir = snapshot_dir
         self.ticket_dir = ticket_dir
         self.timezone = timezone
+        self.time_provider = time_provider
+        self.enable_artifacts = bool(enable_artifacts)
         self.logger = logging.getLogger("engine.pipeline")
+
+    def _now(self) -> datetime:
+        if self.time_provider is None:
+            return datetime.now(self.timezone)
+        now = self.time_provider()
+        if now.tzinfo is None:
+            return now.replace(tzinfo=self.timezone)
+        return now
 
     def _quantum_frame(
         self,
@@ -149,6 +162,7 @@ class TradingEngine:
         timeframe: str,
         base_df: pd.DataFrame,
         min_rows: int = 150,
+        as_of_close_time_ms: Optional[int] = None,
     ) -> pd.DataFrame:
         """
         Prefer in-memory full buffers; if too short, fallback to DB candles to reach
@@ -167,13 +181,17 @@ class TradingEngine:
                 FROM candles
                 WHERE timeframe = ?
                   AND UPPER(symbol) = UPPER(?)
-                ORDER BY open_time DESC
-                LIMIT ?
             """
+            params: list[Any] = [timeframe, self.symbol]
+            if as_of_close_time_ms is not None:
+                query += " AND close_time <= ?"
+                params.append(int(as_of_close_time_ms))
+            query += " ORDER BY open_time DESC LIMIT ?"
+            params.append(int(min_rows))
             hist = pd.read_sql_query(
                 query,
                 conn,
-                params=(timeframe, self.symbol, int(min_rows)),
+                params=params,
             )
             if hist.empty:
                 return base_df.copy()
@@ -216,6 +234,7 @@ class TradingEngine:
                 event_type="status",
                 context=None,
                 ticket_path=None,
+                rr_estimated=None,
                 trigger=trigger,
             )
 
@@ -244,6 +263,7 @@ class TradingEngine:
             event_type=draft.event_type,
             context=market.context,
             ticket_path=ticket_path,
+            rr_estimated=draft.rr_estimated,
             trigger=trigger,
         )
 
@@ -253,14 +273,16 @@ class TradingEngine:
             int(runtime_cfg["max_signals_per_day"]),
             int(runtime_cfg["cooldown_minutes"]),
         )
+        now = self._now()
+        now_ms = int(now.timestamp() * 1000)
 
         strategy_profile = get_strategy_profile(str(runtime_cfg.get("strategy_mode", "BALANCED")))
         df_m15 = self.store.to_df("15m")
         df_h1 = self.store.to_df("1h")
         df_h4 = self.store.to_df("4h")
-        quantum_df_m15 = self._quantum_frame(timeframe="15m", base_df=df_m15, min_rows=150)
-        quantum_df_h1 = self._quantum_frame(timeframe="1h", base_df=df_h1, min_rows=150)
-        quantum_df_h4 = self._quantum_frame(timeframe="4h", base_df=df_h4, min_rows=150)
+        quantum_df_m15 = self._quantum_frame(timeframe="15m", base_df=df_m15, min_rows=150, as_of_close_time_ms=now_ms)
+        quantum_df_h1 = self._quantum_frame(timeframe="1h", base_df=df_h1, min_rows=150, as_of_close_time_ms=now_ms)
+        quantum_df_h4 = self._quantum_frame(timeframe="4h", base_df=df_h4, min_rows=150, as_of_close_time_ms=now_ms)
 
         bias_h1 = detect_bias_h1(df_h1) if len(df_h1) > 0 else "neutral"
         bias_h4 = detect_bias_h4(df_h4) if len(df_h4) > 0 else "neutral"
@@ -270,10 +292,12 @@ class TradingEngine:
         # Structural persistence may require longer history than short-term bias features.
         quantum = build_quantum_state(quantum_df_m15, quantum_df_h1, quantum_df_h4)
 
-        liq_data = fetch_liquidation_map("BTC")
+        use_external_context = bool(runtime_cfg.get("use_external_context", True))
         liquidation_cluster = None
-        if liq_data and liq_data.get("clusters"):
-            liquidation_cluster = liq_data["clusters"][0]["price"]
+        if use_external_context:
+            liq_data = fetch_liquidation_map("BTC")
+            if liq_data and liq_data.get("clusters"):
+                liquidation_cluster = liq_data["clusters"][0]["price"]
 
         latest_price = float(df_m15["close"].iloc[-1]) if not df_m15.empty else None
         squeeze_risk = squeeze_risk_label_from_prices(
@@ -283,15 +307,24 @@ class TradingEngine:
             medium_pct=float(runtime_cfg["squeeze_risk_medium_pct"]),
         )
 
-        derivatives = build_derivatives_context(self.symbol)
+        derivatives = {
+            "open_interest_now": None,
+            "open_interest_change_pct_15m": None,
+            "funding_rate": None,
+            "mark_price": None,
+            "next_funding_time": None,
+            "crowding": "neutral",
+            "source": "disabled",
+        }
+        if use_external_context:
+            derivatives = build_derivatives_context(self.symbol)
         news = build_news_context(
             symbol=self.symbol,
             limit=int(runtime_cfg.get("news_headline_limit", 6)),
             cache_minutes=int(runtime_cfg.get("news_cache_minutes", 15)),
-            enabled=bool(runtime_cfg.get("news_enabled", True)),
+            enabled=bool(runtime_cfg.get("news_enabled", True) and use_external_context),
         )
 
-        now = datetime.now(self.timezone)
         risk_before = self.risk.status_snapshot(now)
 
         state = MarketState(
@@ -677,6 +710,7 @@ class TradingEngine:
 
         if draft.setup_name == "NONE":
             self._save_status_event(
+                now=market.now,
                 event_type="status",
                 decision=draft.decision,
                 setup=draft.setup_name,
@@ -715,7 +749,7 @@ class TradingEngine:
             return None
 
         snapshot_path = ""
-        if draft.decision in ("BUY", "SELL"):
+        if self.enable_artifacts and draft.decision in ("BUY", "SELL"):
             snapshot_path = save_snapshot(
                 market.df_m15,
                 self.snapshot_dir,
@@ -768,44 +802,54 @@ class TradingEngine:
             "execution": execution_info,
         }
 
-        ticket = build_ticket(
-            symbol=self.symbol,
-            timestamp=market.now,
-            decision=draft.decision,
-            setup=draft.setup_name,
-            bias_h1=market.bias_h1,
-            bias_h4=market.bias_h4,
-            combined_bias=market.combined_bias,
-            volatility=market.volatility,
-            entry=draft.entry,
-            sl=draft.sl,
-            tp1=draft.tp1,
-            tp2=draft.tp2,
-            score=draft.score,
-            grade=draft.grade,
-            components=draft.components,
-            reasons=[f"Trigger={trigger}"] + draft.reasons + [f"execution_status={execution_info.get('status')}"],
-            snapshot_path=snapshot_path,
-            rr_min_required=float(market.runtime_cfg["rr_min"]),
-            min_score_for_signal=int(market.runtime_cfg["min_score_for_signal"]),
-            max_signals_per_day=int(market.runtime_cfg["max_signals_per_day"]),
-            cooldown_minutes=int(market.runtime_cfg["cooldown_minutes"]),
-            context=market.context,
-            action=draft.action,
-            liquidation_cluster=market.liquidation_cluster,
-            strategy_snapshot=event_snapshot["strategy"],
-            news_snapshot=event_snapshot["news"],
-            quantum_snapshot=event_snapshot["quantum"],
-            event_snapshot=event_snapshot,
-            risk_gate_status=draft.risk_after,
-        )
-        ticket_path = ticket.save(self.ticket_dir)
+        signal_id = f"sig_{market.now.strftime('%Y%m%d_%H%M%S_%f')}_{self.symbol.upper()}"
+        signal_timestamp = market.now.isoformat()
+        signal_symbol = self.symbol.upper()
+        ticket_path: Optional[str] = None
+        ticket_payload_id: Optional[str] = None
+        if self.enable_artifacts:
+            ticket = build_ticket(
+                symbol=self.symbol,
+                timestamp=market.now,
+                decision=draft.decision,
+                setup=draft.setup_name,
+                bias_h1=market.bias_h1,
+                bias_h4=market.bias_h4,
+                combined_bias=market.combined_bias,
+                volatility=market.volatility,
+                entry=draft.entry,
+                sl=draft.sl,
+                tp1=draft.tp1,
+                tp2=draft.tp2,
+                score=draft.score,
+                grade=draft.grade,
+                components=draft.components,
+                reasons=[f"Trigger={trigger}"] + draft.reasons + [f"execution_status={execution_info.get('status')}"],
+                snapshot_path=snapshot_path,
+                rr_min_required=float(market.runtime_cfg["rr_min"]),
+                min_score_for_signal=int(market.runtime_cfg["min_score_for_signal"]),
+                max_signals_per_day=int(market.runtime_cfg["max_signals_per_day"]),
+                cooldown_minutes=int(market.runtime_cfg["cooldown_minutes"]),
+                context=market.context,
+                action=draft.action,
+                liquidation_cluster=market.liquidation_cluster,
+                strategy_snapshot=event_snapshot["strategy"],
+                news_snapshot=event_snapshot["news"],
+                quantum_snapshot=event_snapshot["quantum"],
+                event_snapshot=event_snapshot,
+                risk_gate_status=draft.risk_after,
+            )
+            ticket_path = ticket.save(self.ticket_dir)
+            signal_id = str(ticket.payload["id"])
+            signal_timestamp = str(ticket.payload["timestamp"])
+            signal_symbol = str(ticket.payload["symbol"])
+            ticket_payload_id = signal_id
 
         self.db.insert_signal(
             {
-                "signal_id": ticket.payload["id"],
-                "timestamp": ticket.payload["timestamp"],
-                "symbol": ticket.payload["symbol"],
+                "signal_id": signal_id,
+                "timestamp": signal_timestamp,
+                "symbol": signal_symbol,
                 "event_type": "signal",
                 "decision": draft.decision,
                 "setup": draft.setup_name,
@@ -842,15 +886,16 @@ class TradingEngine:
             }
         )
 
-        self._emit_trade_alerts(
-            market=market,
-            draft=draft,
-            scores=scores,
-            ticket_id=ticket.payload["id"],
-            ticket_path=ticket_path,
-            trigger=trigger,
-            why_text=why_text,
-        )
+        if ticket_payload_id is not None and ticket_path is not None:
+            self._emit_trade_alerts(
+                market=market,
+                draft=draft,
+                scores=scores,
+                ticket_id=ticket_payload_id,
+                ticket_path=ticket_path,
+                trigger=trigger,
+                why_text=why_text,
+            )
         self._emit_news_regime_alert(market, trigger, draft.action)
         self.logger.info(
             "[Pipeline] step8 persist_logs_and_metrics signal_saved decision=%s setup=%s score=%s",
@@ -932,7 +977,7 @@ class TradingEngine:
             return pts if imbalance < 0 else -pts
         return 0
 
-    def _save_status_event(self, **row: Any) -> None:
+    def _save_status_event(self, *, now: Optional[datetime] = None, **row: Any) -> None:
         last_evt = self.db.get_last_event()
         if last_evt is not None:
             if (
@@ -945,14 +990,15 @@ class TradingEngine:
             ):
                 return
 
+        event_now = now or self._now()
         signal_id = (
             f"evt_{row.get('event_type')}_"
-            f"{datetime.now(self.timezone).strftime('%Y%m%d_%H%M%S_%f')}_"
+            f"{event_now.strftime('%Y%m%d_%H%M%S_%f')}_"
             f"{self.symbol.upper()}"
         )
         payload = {
             "signal_id": signal_id,
-            "timestamp": datetime.now(self.timezone).isoformat(),
+            "timestamp": event_now.isoformat(),
             "symbol": self.symbol.upper(),
         }
         payload.update(row)
