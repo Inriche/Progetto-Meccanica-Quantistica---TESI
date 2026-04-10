@@ -7,17 +7,19 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from runtime.runtime_config import load_runtime_config
 from ui.ui_helpers import (
-    squeeze_risk_label,
-    funding_bias_label,
-    oi_momentum_label,
-    structure_read_label,
-    orderbook_read_label,
     derivatives_read_label,
+    final_verdict_text,
+    funding_bias_label,
     grade_badge,
+    oi_momentum_label,
+    orderbook_read_label,
+    quantum_read_label,
     rr_quality_label,
     setup_state_label,
-    final_verdict_text,
+    squeeze_risk_label,
+    structure_read_label,
 )
 
 DB_PATH = "out/assistant.db"
@@ -28,7 +30,7 @@ COMMANDS_FILE = Path("out/commands.txt")
 
 st.set_page_config(
     page_title="Trading Assistant Dashboard",
-    layout="wide"
+    layout="wide",
 )
 
 
@@ -64,6 +66,18 @@ def load_recent_events(limit: int = 20) -> pd.DataFrame:
             oi_now,
             oi_change_pct,
             crowding,
+            strategy_mode,
+            strategy_score,
+            news_bias,
+            news_sentiment,
+            news_impact,
+            news_score,
+            quantum_state,
+            quantum_coherence,
+            quantum_phase_bias,
+            quantum_interference,
+            quantum_tunneling,
+            quantum_score,
             ticket_path
         FROM signals
         ORDER BY id DESC
@@ -160,6 +174,14 @@ def color_badge(label: str, value: str):
         "SELL": "#ef4444",
         "NONE": "#64748b",
         "BLOCKED": "#f97316",
+        "COHERENT_BULLISH": "#16a34a",
+        "COHERENT_BEARISH": "#ef4444",
+        "BULLISH_TUNNEL": "#22c55e",
+        "BEARISH_TUNNEL": "#f43f5e",
+        "DECOHERENT": "#f97316",
+        "TRANSITIONAL": "#64748b",
+        "LOW_ENERGY": "#0ea5e9",
+        "WARMING_UP": "#64748b",
     }
     color = palette.get(str(value), "#334155")
     st.markdown(
@@ -212,6 +234,7 @@ latest_event = load_latest_event()
 latest_ticket = load_latest_ticket()
 latest_snapshot = load_latest_snapshot()
 recent_df = load_recent_events(limit=15)
+runtime_cfg = load_runtime_config()
 
 if latest_event is None:
     st.warning("No events found yet.")
@@ -224,16 +247,18 @@ if not df_candles.empty:
 
 liq_cluster = None
 if latest_ticket is not None:
-    liq_cluster = (
-        latest_ticket.get("liquidity", {})
-        .get("nearest_liquidation_cluster")
-    )
+    liq_cluster = latest_ticket.get("liquidity", {}).get("nearest_liquidation_cluster")
 
-squeeze_label, squeeze_icon = squeeze_risk_label(latest_price, liq_cluster)
+squeeze_label, squeeze_icon = squeeze_risk_label(
+    latest_price,
+    liq_cluster,
+    high_pct=float(runtime_cfg["squeeze_risk_high_pct"]),
+    medium_pct=float(runtime_cfg["squeeze_risk_medium_pct"]),
+)
 
 st.subheader("Live Status")
 
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4, c5 = st.columns(5)
 
 with c1:
     color_badge("Decision", str(latest_event.get("decision", "N/A")))
@@ -247,8 +272,20 @@ with c3:
 with c4:
     color_badge("Action", str(latest_event.get("action", "N/A")))
 
+with c5:
+    color_badge("Quantum", str(latest_event.get("quantum_state", "N/A")))
+
 st.write(f"**Timestamp:** {latest_event.get('timestamp', 'N/A')}")
 st.write(f"**Why:** {latest_event.get('why', 'N/A')}")
+
+meta1, meta2, meta3 = st.columns(3)
+with meta1:
+    st.metric("Strategy Mode", str(latest_event.get("strategy_mode", "N/A")))
+with meta2:
+    st.metric("News Bias", str(latest_event.get("news_bias", "N/A")))
+with meta3:
+    news_score_val = latest_event.get("news_score")
+    st.metric("News Score", "N/A" if news_score_val is None or pd.isna(news_score_val) else int(news_score_val))
 
 st.divider()
 
@@ -260,28 +297,78 @@ imb_summary = latest_event.get("ob_imbalance")
 crowding_val = latest_event.get("crowding", "N/A")
 funding_val = latest_event.get("funding_rate")
 oi_change_val = latest_event.get("oi_change_pct")
+quantum_state_val = str(latest_event.get("quantum_state", "N/A"))
+quantum_coherence_val = latest_event.get("quantum_coherence")
+quantum_phase_val = latest_event.get("quantum_phase_bias")
+strategy_mode_val = str(latest_event.get("strategy_mode", "N/A"))
+news_bias_val = str(latest_event.get("news_bias", "N/A"))
+news_sentiment_val = latest_event.get("news_sentiment")
+news_impact_val = latest_event.get("news_impact")
 
 structure_label, structure_icon = structure_read_label(context_val)
+quantum_label, quantum_icon = quantum_read_label(
+    quantum_state_val,
+    quantum_coherence_val,
+    quantum_phase_val,
+)
 orderbook_label, orderbook_icon = orderbook_read_label(imb_summary)
 deriv_label, deriv_icon = derivatives_read_label(crowding_val, funding_val, oi_change_val)
 
-s1, s2, s3, s4 = st.columns(4)
+s1, s2, s3, s4, s5 = st.columns(5)
 
 with s1:
     st.markdown(f"### {structure_icon} Structure")
     st.write(structure_label)
 
 with s2:
+    st.markdown(f"### {quantum_icon} Quantum")
+    st.write(quantum_label)
+
+with s3:
     st.markdown(f"### {orderbook_icon} Order Book")
     st.write(orderbook_label)
 
-with s3:
+with s4:
     st.markdown(f"### {deriv_icon} Derivatives")
     st.write(deriv_label)
 
-with s4:
-    st.markdown("### 🎯 Final Read")
+with s5:
+    st.markdown("### Final Read")
     st.write(action_val)
+
+st.divider()
+
+st.subheader("Strategy And News")
+
+sn1, sn2, sn3, sn4, sn5 = st.columns(5)
+
+with sn1:
+    st.metric("Strategy", strategy_mode_val)
+
+with sn2:
+    strategy_score_val = latest_event.get("strategy_score")
+    st.metric("Strategy Score", "N/A" if strategy_score_val is None or pd.isna(strategy_score_val) else int(strategy_score_val))
+
+with sn3:
+    st.metric("News Bias", news_bias_val)
+
+with sn4:
+    st.metric("News Sentiment", "N/A" if news_sentiment_val is None or pd.isna(news_sentiment_val) else round(float(news_sentiment_val), 3))
+
+with sn5:
+    st.metric("News Impact", "N/A" if news_impact_val is None or pd.isna(news_impact_val) else round(float(news_impact_val), 3))
+
+if latest_ticket is not None:
+    ticket_news = latest_ticket.get("news", {}) or latest_ticket.get("event_snapshot", {}).get("news", {})
+    headlines = ticket_news.get("headlines", [])
+    if headlines:
+        st.markdown("**Top News Headlines**")
+        for item in headlines[:5]:
+            title = str(item.get("title", ""))
+            topic = str(item.get("topic", "general"))
+            impact = item.get("impact")
+            sentiment = item.get("sentiment")
+            st.write(f"- [{title}]({item.get('link', '#')}) | topic={topic} | impact={impact} | sentiment={sentiment}")
 
 st.divider()
 
@@ -291,15 +378,16 @@ score_val = latest_event.get("score")
 rr_val = latest_event.get("rr_estimated")
 decision_val = str(latest_event.get("decision", "N/A"))
 setup_val = str(latest_event.get("setup", "N/A"))
+quantum_score_val = latest_event.get("quantum_score")
 
 grade_label, grade_icon = grade_badge(score_val)
 rr_label, rr_icon = rr_quality_label(rr_val)
 setup_state, setup_state_icon = setup_state_label(decision_val, setup_val)
 
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4, c5 = st.columns(5)
 
 with c1:
-    st.markdown("### 📊 Score")
+    st.markdown("### Score")
     st.write("N/A" if score_val is None or pd.isna(score_val) else int(score_val))
 
 with c2:
@@ -314,6 +402,45 @@ with c4:
     st.markdown(f"### {setup_state_icon} Setup State")
     st.write(setup_state)
 
+with c5:
+    st.markdown("### Quantum Score")
+    st.write("N/A" if quantum_score_val is None or pd.isna(quantum_score_val) else int(quantum_score_val))
+
+st.divider()
+
+st.subheader("Quantum Layer")
+
+q1, q2, q3, q4, q5 = st.columns(5)
+
+with q1:
+    st.metric("Quantum State", quantum_state_val)
+
+with q2:
+    st.metric(
+        "Coherence",
+        "N/A" if quantum_coherence_val is None or pd.isna(quantum_coherence_val) else round(float(quantum_coherence_val), 3),
+    )
+
+with q3:
+    st.metric(
+        "Phase Bias",
+        "N/A" if quantum_phase_val is None or pd.isna(quantum_phase_val) else round(float(quantum_phase_val), 3),
+    )
+
+with q4:
+    qv = latest_event.get("quantum_interference")
+    st.metric(
+        "Interference",
+        "N/A" if qv is None or pd.isna(qv) else round(float(qv), 3),
+    )
+
+with q5:
+    qv = latest_event.get("quantum_tunneling")
+    st.metric(
+        "Tunneling Prob.",
+        "N/A" if qv is None or pd.isna(qv) else round(float(qv), 3),
+    )
+
 st.divider()
 
 st.subheader("Final Verdict")
@@ -326,6 +453,8 @@ verdict_title, verdict_body = final_verdict_text(
     score=latest_event.get("score"),
     rr_estimated=latest_event.get("rr_estimated"),
     crowding=str(latest_event.get("crowding", "N/A")),
+    rr_min_required=float(runtime_cfg["rr_min"]),
+    min_score_for_signal=int(runtime_cfg["min_score_for_signal"]),
 )
 
 st.markdown(
@@ -378,7 +507,6 @@ st.divider()
 
 st.subheader("Derivatives Context")
 
-
 d1, d2, d3, d4 = st.columns(4)
 
 with d1:
@@ -391,7 +519,7 @@ with d2:
 
 with d3:
     oi_ch = latest_event.get("oi_change_pct")
-    st.metric("OI Change 15m", "N/A" if oi_ch is None or pd.isna(oi_ch) else f"{float(oi_ch)*100:.2f}%")
+    st.metric("OI Change 15m", "N/A" if oi_ch is None or pd.isna(oi_ch) else f"{float(oi_ch) * 100:.2f}%")
 
 with d4:
     crowding = latest_event.get("crowding", "N/A")
@@ -412,7 +540,7 @@ l1, l2 = st.columns(2)
 with l1:
     st.metric(
         "Nearest Liquidation Cluster",
-        "N/A" if liq_cluster is None else round(float(liq_cluster), 2)
+        "N/A" if liq_cluster is None else round(float(liq_cluster), 2),
     )
 
 with l2:
@@ -435,7 +563,7 @@ with left:
                 high=df_candles["high"],
                 low=df_candles["low"],
                 close=df_candles["close"],
-                name="BTCUSDT"
+                name="BTCUSDT",
             )
         )
 
@@ -445,43 +573,23 @@ with left:
         tp2 = latest_event.get("tp2")
 
         if entry is not None and not pd.isna(entry):
-            fig.add_hline(
-                y=float(entry),
-                line_dash="solid",
-                line_color="blue",
-                annotation_text="ENTRY"
-            )
+            fig.add_hline(y=float(entry), line_dash="solid", line_color="blue", annotation_text="ENTRY")
 
         if sl is not None and not pd.isna(sl):
-            fig.add_hline(
-                y=float(sl),
-                line_dash="dot",
-                line_color="red",
-                annotation_text="SL"
-            )
+            fig.add_hline(y=float(sl), line_dash="dot", line_color="red", annotation_text="SL")
 
         if tp1 is not None and not pd.isna(tp1):
-            fig.add_hline(
-                y=float(tp1),
-                line_dash="dash",
-                line_color="green",
-                annotation_text="TP1"
-            )
+            fig.add_hline(y=float(tp1), line_dash="dash", line_color="green", annotation_text="TP1")
 
         if tp2 is not None and not pd.isna(tp2):
-            fig.add_hline(
-                y=float(tp2),
-                line_dash="dash",
-                line_color="green",
-                annotation_text="TP2"
-            )
+            fig.add_hline(y=float(tp2), line_dash="dash", line_color="green", annotation_text="TP2")
 
         if liq_cluster is not None:
             fig.add_hline(
                 y=float(liq_cluster),
                 line_dash="dot",
                 line_color="orange",
-                annotation_text="LIQ CLUSTER"
+                annotation_text="LIQ CLUSTER",
             )
 
         fig.update_layout(
@@ -500,6 +608,7 @@ with right:
     st.write(f"**Symbol:** {latest_event.get('symbol', 'N/A')}")
     st.write(f"**Score:** {latest_event.get('score', 'N/A')}")
     st.write(f"**RR Estimated:** {latest_event.get('rr_estimated', 'N/A')}")
+    st.write(f"**Quantum Score:** {latest_event.get('quantum_score', 'N/A')}")
     st.write(f"**Entry:** {latest_event.get('entry', 'N/A')}")
     st.write(f"**SL:** {latest_event.get('sl', 'N/A')}")
     st.write(f"**TP1:** {latest_event.get('tp1', 'N/A')}")
@@ -534,7 +643,12 @@ with col_info:
         f"""
         **Context:** {context}  
         **Action:** {action}  
+        **Strategy:** {strategy_mode_val}  
         **Reason:** {why}  
+        **News Bias:** {news_bias_val}  
+        **News Sentiment:** {news_sentiment_val}  
+        **News Impact:** {news_impact_val}  
+        **Quantum State:** {quantum_state_val}  
         **Nearest Liquidation Cluster:** {liq_cluster if liq_cluster is not None else "N/A"}  
         **Squeeze Risk:** {squeeze_icon} {squeeze_label}  
         **Crowding:** {crowding}  

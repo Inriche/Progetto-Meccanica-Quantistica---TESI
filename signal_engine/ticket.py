@@ -46,10 +46,17 @@ def build_ticket(
     reasons: list,
     snapshot_path: Optional[str],
     rr_min_required: float = 2.0,
+    min_score_for_signal: int = 70,
+    max_signals_per_day: int = 2,
+    cooldown_minutes: int = 60,
     context: str = "transition",
     action: str = "STAND_BY",
     liquidation_cluster: Optional[float] = None,
+    strategy_snapshot: Optional[Dict[str, Any]] = None,
+    news_snapshot: Optional[Dict[str, Any]] = None,
+    quantum_snapshot: Optional[Dict[str, Any]] = None,
     event_snapshot: Optional[Dict[str, Any]] = None,
+    risk_gate_status: Optional[Dict[str, Any]] = None,
 ) -> Ticket:
 
     signal_id = make_signal_id(symbol, timestamp)
@@ -96,9 +103,11 @@ def build_ticket(
         },
         "risk": {
             "rr_min_required": rr_min_required,
+            "min_score_for_signal": min_score_for_signal,
             "rr_estimated": rr_est,
-            "max_signals_per_day": 2,
-            "cooldown_minutes": 60
+            "max_signals_per_day": max_signals_per_day,
+            "cooldown_minutes": cooldown_minutes,
+            "gate_status": risk_gate_status or {},
         },
         "confidence": {
             "score": score,
@@ -113,6 +122,9 @@ def build_ticket(
         "liquidity": {
             "nearest_liquidation_cluster": liquidation_cluster
         },
+        "strategy": strategy_snapshot or {},
+        "news": news_snapshot or {},
+        "quantum": quantum_snapshot or {},
         "event_snapshot": event_snapshot or {},
         "evidence": {
             "snapshot_path": snapshot_path,

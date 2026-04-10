@@ -10,6 +10,10 @@ def generate_explanation(
     why: str,
     ob_avg,
     ob_raw,
+    quantum_state: str = "N/A",
+    quantum_coherence=None,
+    quantum_phase_bias=None,
+    quantum_tunneling=None,
 ) -> str:
     parts = []
 
@@ -23,6 +27,15 @@ def generate_explanation(
         )
     else:
         parts.append("Order book: not available.")
+
+    quantum_bits = [f"state={quantum_state}"]
+    if quantum_coherence is not None:
+        quantum_bits.append(f"coherence={quantum_coherence:.2f}")
+    if quantum_phase_bias is not None:
+        quantum_bits.append(f"phase_bias={quantum_phase_bias:.2f}")
+    if quantum_tunneling is not None:
+        quantum_bits.append(f"tunneling={quantum_tunneling:.2f}")
+    parts.append("Quantum layer: " + ", ".join(quantum_bits) + ".")
 
     if setup_info == "no_setup":
         parts.append("No valid setup is currently active.")

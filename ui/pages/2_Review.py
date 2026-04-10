@@ -171,7 +171,7 @@ st.write(f"**Why:** {event.get('why', 'N/A')}")
 
 st.divider()
 
-m1, m2, m3, m4 = st.columns(4)
+m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
 
 with m1:
     st.metric("Score", "N/A" if pd.isna(event.get("score")) else int(event.get("score")))
@@ -187,6 +187,16 @@ with m3:
 with m4:
     oi_ch = event.get("oi_change_pct")
     st.metric("OI Change 15m", "N/A" if pd.isna(oi_ch) else f"{float(oi_ch)*100:.2f}%")
+
+with m5:
+    q_score = event.get("quantum_score")
+    st.metric("Quantum Score", "N/A" if pd.isna(q_score) else int(q_score))
+
+with m6:
+    st.metric("Strategy", event.get("strategy_mode", "N/A"))
+
+with m7:
+    st.metric("News Bias", event.get("news_bias", "N/A"))
 
 st.divider()
 
@@ -322,6 +332,15 @@ summary_lines = [
     f"- Score: {score}",
     f"- RR: {rr_val}",
     f"- Crowding: {crowding}",
+    f"- Strategy Mode: {event.get('strategy_mode', 'N/A')}",
+    f"- Strategy Score: {event.get('strategy_score', 'N/A')}",
+    f"- News Bias: {event.get('news_bias', 'N/A')}",
+    f"- News Sentiment: {event.get('news_sentiment', 'N/A')}",
+    f"- News Impact: {event.get('news_impact', 'N/A')}",
+    f"- News Score: {event.get('news_score', 'N/A')}",
+    f"- Quantum State: {event.get('quantum_state', 'N/A')}",
+    f"- Quantum Coherence: {event.get('quantum_coherence', 'N/A')}",
+    f"- Quantum Phase Bias: {event.get('quantum_phase_bias', 'N/A')}",
 ]
 
 for line in summary_lines:

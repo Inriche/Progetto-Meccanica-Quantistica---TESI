@@ -61,6 +61,18 @@ class DB:
             ("oi_now", "REAL"),
             ("oi_change_pct", "REAL"),
             ("crowding", "TEXT"),
+            ("strategy_mode", "TEXT"),
+            ("strategy_score", "INTEGER"),
+            ("news_bias", "TEXT"),
+            ("news_sentiment", "REAL"),
+            ("news_impact", "REAL"),
+            ("news_score", "INTEGER"),
+            ("quantum_state", "TEXT"),
+            ("quantum_coherence", "REAL"),
+            ("quantum_phase_bias", "REAL"),
+            ("quantum_interference", "REAL"),
+            ("quantum_tunneling", "REAL"),
+            ("quantum_score", "INTEGER"),
             ("snapshot_path", "TEXT"),
             ("ticket_path", "TEXT"),
         ]
@@ -97,8 +109,10 @@ class DB:
              entry, sl, tp1, tp2, rr_estimated, score,
              ob_imbalance, ob_raw, ob_age_ms,
              funding_rate, oi_now, oi_change_pct, crowding,
+             strategy_mode, strategy_score, news_bias, news_sentiment, news_impact, news_score,
+             quantum_state, quantum_coherence, quantum_phase_bias, quantum_interference, quantum_tunneling, quantum_score,
              snapshot_path, ticket_path)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 row["signal_id"],
@@ -123,6 +137,18 @@ class DB:
                 row.get("oi_now"),
                 row.get("oi_change_pct"),
                 row.get("crowding"),
+                row.get("strategy_mode"),
+                row.get("strategy_score"),
+                row.get("news_bias"),
+                row.get("news_sentiment"),
+                row.get("news_impact"),
+                row.get("news_score"),
+                row.get("quantum_state"),
+                row.get("quantum_coherence"),
+                row.get("quantum_phase_bias"),
+                row.get("quantum_interference"),
+                row.get("quantum_tunneling"),
+                row.get("quantum_score"),
                 row.get("snapshot_path"),
                 row.get("ticket_path"),
             ),
@@ -136,6 +162,8 @@ class DB:
                    entry, sl, tp1, tp2, rr_estimated, score,
                    ob_imbalance, ob_raw, ob_age_ms,
                    funding_rate, oi_now, oi_change_pct, crowding,
+                   strategy_mode, strategy_score, news_bias, news_sentiment, news_impact, news_score,
+                   quantum_state, quantum_coherence, quantum_phase_bias, quantum_interference, quantum_tunneling, quantum_score,
                    ticket_path
             FROM signals
             ORDER BY id DESC

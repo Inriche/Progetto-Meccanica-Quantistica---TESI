@@ -42,6 +42,18 @@ def load_events(limit: Optional[int] = None) -> pd.DataFrame:
             oi_now,
             oi_change_pct,
             crowding,
+            strategy_mode,
+            strategy_score,
+            news_bias,
+            news_sentiment,
+            news_impact,
+            news_score,
+            quantum_state,
+            quantum_coherence,
+            quantum_phase_bias,
+            quantum_interference,
+            quantum_tunneling,
+            quantum_score,
             ticket_path
         FROM signals
         ORDER BY id DESC

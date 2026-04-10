@@ -43,6 +43,18 @@ def load_events_basic() -> pd.DataFrame:
             oi_now,
             oi_change_pct,
             crowding,
+            strategy_mode,
+            strategy_score,
+            news_bias,
+            news_sentiment,
+            news_impact,
+            news_score,
+            quantum_state,
+            quantum_coherence,
+            quantum_phase_bias,
+            quantum_interference,
+            quantum_tunneling,
+            quantum_score,
             ticket_path
         FROM signals
         ORDER BY id DESC
@@ -81,6 +93,18 @@ def load_event_by_id(event_id: int) -> Optional[dict]:
             oi_now,
             oi_change_pct,
             crowding,
+            strategy_mode,
+            strategy_score,
+            news_bias,
+            news_sentiment,
+            news_impact,
+            news_score,
+            quantum_state,
+            quantum_coherence,
+            quantum_phase_bias,
+            quantum_interference,
+            quantum_tunneling,
+            quantum_score,
             ticket_path
         FROM signals
         WHERE id = ?
@@ -216,12 +240,21 @@ def classify_reason(reason: str) -> tuple[str, str]:
             return "Crowding", "#f97316"
         return "Crowding", "#64748b"
 
+    if "strategy_mode=" in r or "strategy_note=" in r:
+        return "Strategy", "#14b8a6"
+
+    if "news_bias=" in r or "news " in r or "news_topic=" in r:
+        return "News", "#8b5cf6"
+
     if "squeeze_risk=" in r:
         if "high" in r:
             return "Squeeze Risk", "#ef4444"
         if "medium" in r:
             return "Squeeze Risk", "#f97316"
         return "Squeeze Risk", "#64748b"
+
+    if "quantum_state=" in r or "quantum " in r:
+        return "Quantum", "#06b6d4"
 
     if "orderbook" in r:
         return "Order Book", "#0ea5e9"

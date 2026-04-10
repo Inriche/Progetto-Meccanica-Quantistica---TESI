@@ -22,6 +22,14 @@ DEFAULT_RUNTIME_CONFIG = {
 
     "derivatives_extreme_oi_pct": 0.02,
     "derivatives_mild_oi_pct": 0.01,
+
+    "quantum_coherence_threshold": 0.62,
+    "quantum_tunneling_threshold": 0.70,
+
+    "strategy_mode": "BALANCED",
+    "news_enabled": True,
+    "news_cache_minutes": 15,
+    "news_headline_limit": 6,
 }
 
 
@@ -37,6 +45,12 @@ PRESET_CONFIGS = {
         "squeeze_risk_medium_pct": 0.0045,
         "derivatives_extreme_oi_pct": 0.018,
         "derivatives_mild_oi_pct": 0.009,
+        "quantum_coherence_threshold": 0.68,
+        "quantum_tunneling_threshold": 0.74,
+        "strategy_mode": "TREND_FOLLOWER",
+        "news_enabled": True,
+        "news_cache_minutes": 15,
+        "news_headline_limit": 6,
     },
     "Balanced": {
         "rr_min": 1.5,
@@ -49,6 +63,12 @@ PRESET_CONFIGS = {
         "squeeze_risk_medium_pct": 0.0050,
         "derivatives_extreme_oi_pct": 0.020,
         "derivatives_mild_oi_pct": 0.010,
+        "quantum_coherence_threshold": 0.62,
+        "quantum_tunneling_threshold": 0.70,
+        "strategy_mode": "BALANCED",
+        "news_enabled": True,
+        "news_cache_minutes": 15,
+        "news_headline_limit": 6,
     },
     "Aggressive": {
         "rr_min": 1.3,
@@ -61,6 +81,12 @@ PRESET_CONFIGS = {
         "squeeze_risk_medium_pct": 0.0040,
         "derivatives_extreme_oi_pct": 0.025,
         "derivatives_mild_oi_pct": 0.012,
+        "quantum_coherence_threshold": 0.56,
+        "quantum_tunneling_threshold": 0.64,
+        "strategy_mode": "BREAKOUT_SURFER",
+        "news_enabled": True,
+        "news_cache_minutes": 10,
+        "news_headline_limit": 8,
     },
 }
 
@@ -116,6 +142,7 @@ def describe_runtime_profile(cfg: Dict[str, Any]) -> Dict[str, str]:
     min_score = int(cfg["min_score_for_signal"])
     ob_neutral = float(cfg["orderbook_neutral_threshold"])
     squeeze_high = float(cfg["squeeze_risk_high_pct"])
+    quantum_coherence = float(cfg["quantum_coherence_threshold"])
 
     strictness_score = 0
 
@@ -133,6 +160,9 @@ def describe_runtime_profile(cfg: Dict[str, Any]) -> Dict[str, str]:
         strictness_score += 1
 
     if squeeze_high <= 0.002:
+        strictness_score += 1
+
+    if quantum_coherence >= 0.66:
         strictness_score += 1
 
     if strictness_score >= 5:

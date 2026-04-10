@@ -37,12 +37,14 @@ with top4:
 
 st.divider()
 
-m1, m2, m3, m4 = st.columns(4)
+m1, m2, m3, m4, m5, m6 = st.columns(6)
 
 avg_score = safe_mean(trade_df["score"]) if not trade_df.empty else None
 avg_rr = safe_mean(trade_df["rr_estimated"]) if not trade_df.empty else None
 avg_oi_change = safe_mean(events["oi_change_pct"])
 avg_funding = safe_mean(events["funding_rate"])
+avg_quantum_coherence = safe_mean(events["quantum_coherence"])
+avg_news_impact = safe_mean(events["news_impact"])
 
 with m1:
     st.metric("Avg Score", "N/A" if avg_score is None else round(avg_score, 2))
@@ -55,6 +57,18 @@ with m3:
 
 with m4:
     st.metric("Avg Funding", "N/A" if avg_funding is None else round(avg_funding, 6))
+
+with m5:
+    st.metric(
+        "Avg Quantum Coh.",
+        "N/A" if avg_quantum_coherence is None else round(avg_quantum_coherence, 3),
+    )
+
+with m6:
+    st.metric(
+        "Avg News Impact",
+        "N/A" if avg_news_impact is None else round(avg_news_impact, 3),
+    )
 
 st.divider()
 
@@ -79,22 +93,22 @@ with c1:
         st.info("No context data.")
 
 with c2:
-    st.subheader("Action Distribution")
-    act_df = count_by(events, "action")
-    if not act_df.empty:
+    st.subheader("Strategy Distribution")
+    strategy_df = count_by(events, "strategy_mode")
+    if not strategy_df.empty:
         fig = go.Figure(
             data=[
                 go.Bar(
-                    x=act_df["action"],
-                    y=act_df["count"],
-                    name="Action"
+                    x=strategy_df["strategy_mode"],
+                    y=strategy_df["count"],
+                    name="Strategy"
                 )
             ]
         )
         fig.update_layout(height=350, margin=dict(l=10, r=10, t=10, b=10))
         st.plotly_chart(fig, width="stretch")
     else:
-        st.info("No action data.")
+        st.info("No strategy data.")
 
 st.divider()
 
@@ -119,22 +133,62 @@ with c3:
         st.info("No setup data.")
 
 with c4:
-    st.subheader("Crowding Distribution")
-    crowd_df = count_by(events, "crowding")
-    if not crowd_df.empty:
+    st.subheader("Quantum State Distribution")
+    quantum_df = count_by(events, "quantum_state")
+    if not quantum_df.empty:
         fig = go.Figure(
             data=[
                 go.Bar(
-                    x=crowd_df["crowding"],
-                    y=crowd_df["count"],
-                    name="Crowding"
+                    x=quantum_df["quantum_state"],
+                    y=quantum_df["count"],
+                    name="Quantum State"
                 )
             ]
         )
         fig.update_layout(height=350, margin=dict(l=10, r=10, t=10, b=10))
         st.plotly_chart(fig, width="stretch")
     else:
-        st.info("No crowding data.")
+        st.info("No quantum state data.")
+
+st.divider()
+
+c5, c6 = st.columns(2)
+
+with c5:
+    st.subheader("Action Distribution")
+    act_df = count_by(events, "action")
+    if not act_df.empty:
+        fig = go.Figure(
+            data=[
+                go.Bar(
+                    x=act_df["action"],
+                    y=act_df["count"],
+                    name="Action"
+                )
+            ]
+        )
+        fig.update_layout(height=350, margin=dict(l=10, r=10, t=10, b=10))
+        st.plotly_chart(fig, width="stretch")
+    else:
+        st.info("No action data.")
+
+with c6:
+    st.subheader("News Bias Distribution")
+    news_df = count_by(events, "news_bias")
+    if not news_df.empty:
+        fig = go.Figure(
+            data=[
+                go.Bar(
+                    x=news_df["news_bias"],
+                    y=news_df["count"],
+                    name="News Bias"
+                )
+            ]
+        )
+        fig.update_layout(height=350, margin=dict(l=10, r=10, t=10, b=10))
+        st.plotly_chart(fig, width="stretch")
+    else:
+        st.info("No news bias data.")
 
 st.divider()
 
@@ -155,6 +209,13 @@ else:
             "funding_rate",
             "oi_change_pct",
             "crowding",
+            "strategy_mode",
+            "strategy_score",
+            "news_bias",
+            "news_score",
+            "quantum_state",
+            "quantum_coherence",
+            "quantum_score",
             "ticket_path",
         ]
     ].copy()

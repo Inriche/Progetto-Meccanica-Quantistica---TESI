@@ -1,5 +1,9 @@
-import streamlit as st
+from datetime import datetime
 
+import streamlit as st
+from dateutil import tz
+
+from risk.risk_governor import get_risk_governor_status
 from runtime.runtime_config import (
     load_runtime_config,
     save_runtime_config,
@@ -9,7 +13,9 @@ from runtime.runtime_config import (
     apply_preset,
     describe_runtime_profile,
 )
+from signal_engine.strategy_profile import STRATEGY_PROFILES
 
+ROME_TZ = tz.gettz("Europe/Rome")
 
 st.set_page_config(
     page_title="Trading Assistant - Tune Engine",
@@ -20,6 +26,11 @@ st.title("Trading Assistant - Tune Engine")
 
 cfg = load_runtime_config()
 profile_info = describe_runtime_profile(cfg)
+risk_status = get_risk_governor_status(
+    max_signals_per_day=int(cfg["max_signals_per_day"]),
+    cooldown_minutes=int(cfg["cooldown_minutes"]),
+    now=datetime.now(ROME_TZ),
+)
 
 st.write("Modify the live runtime thresholds used by the engine.")
 st.write("These values are saved in `out/config_runtime.json`.")
@@ -33,6 +44,38 @@ with p1:
 
 with p2:
     st.info(profile_info["description"])
+
+st.divider()
+
+st.subheader("Current Risk Governor State")
+
+r1, r2, r3, r4 = st.columns(4)
+
+with r1:
+    st.metric("Can Emit Now", "YES" if risk_status["can_emit"] else "NO")
+
+with r2:
+    st.metric(
+        "Signals Today",
+        f"{risk_status['signals_today']}/{risk_status['max_signals_per_day']}",
+    )
+
+with r3:
+    cooldown_remaining = risk_status.get("cooldown_remaining_minutes")
+    st.metric(
+        "Cooldown Remaining",
+        "0m" if cooldown_remaining is None else f"{cooldown_remaining:.2f}m",
+    )
+
+with r4:
+    st.metric("Block Reason", risk_status.get("block_reason") or "none")
+
+st.caption(
+    "Last signal time: "
+    + str(risk_status.get("last_signal_time") or "none")
+    + " | State day: "
+    + str(risk_status.get("day"))
+)
 
 st.divider()
 
@@ -62,6 +105,20 @@ st.divider()
 
 with st.form("tune_engine_form"):
     st.subheader("Core Filters")
+
+    strategy_codes = list(STRATEGY_PROFILES.keys())
+    current_strategy = str(cfg.get("strategy_mode", strategy_codes[0]))
+    if current_strategy not in strategy_codes:
+        current_strategy = strategy_codes[0]
+
+    strategy_mode = st.selectbox(
+        "Strategy Mode",
+        options=strategy_codes,
+        index=strategy_codes.index(current_strategy),
+        format_func=lambda code: f"{STRATEGY_PROFILES[code].label} ({code})",
+    )
+
+    st.caption(STRATEGY_PROFILES[strategy_mode].description)
 
     rr_min = st.number_input(
         "RR Minimum",
@@ -156,11 +213,57 @@ with st.form("tune_engine_form"):
         format="%.3f",
     )
 
+    st.divider()
+    st.subheader("Quantum-Inspired Thresholds")
+
+    quantum_coherence_threshold = st.number_input(
+        "Quantum Coherence Threshold",
+        min_value=0.10,
+        max_value=1.00,
+        value=float(cfg["quantum_coherence_threshold"]),
+        step=0.01,
+        format="%.2f",
+    )
+
+    quantum_tunneling_threshold = st.number_input(
+        "Quantum Tunneling Threshold",
+        min_value=0.10,
+        max_value=1.00,
+        value=float(cfg["quantum_tunneling_threshold"]),
+        step=0.01,
+        format="%.2f",
+    )
+
+    st.divider()
+    st.subheader("News Engine")
+
+    news_enabled = st.checkbox(
+        "Enable News Context",
+        value=bool(cfg["news_enabled"]),
+    )
+
+    news_cache_minutes = st.number_input(
+        "News Cache Minutes",
+        min_value=1,
+        max_value=240,
+        value=int(cfg["news_cache_minutes"]),
+        step=1,
+    )
+
+    news_headline_limit = st.number_input(
+        "News Headline Limit",
+        min_value=1,
+        max_value=20,
+        value=int(cfg["news_headline_limit"]),
+        step=1,
+    )
+
     submitted = st.form_submit_button("Save Runtime Config")
 
     if submitted:
         save_runtime_config(
             {
+                "strategy_mode": str(strategy_mode),
                 "rr_min": float(rr_min),
                 "min_score_for_signal": int(min_score_for_signal),
                 "max_signals_per_day": int(max_signals_per_day),
@@ -171,6 +274,11 @@ with st.form("tune_engine_form"):
                 "squeeze_risk_medium_pct": float(squeeze_risk_medium_pct),
                 "derivatives_extreme_oi_pct": float(derivatives_extreme_oi_pct),
                 "derivatives_mild_oi_pct": float(derivatives_mild_oi_pct),
+                "quantum_coherence_threshold": float(quantum_coherence_threshold),
+                "quantum_tunneling_threshold": float(quantum_tunneling_threshold),
+                "news_enabled": bool(news_enabled),
+                "news_cache_minutes": int(news_cache_minutes),
+                "news_headline_limit": int(news_headline_limit),
             }
         )
         st.success("Runtime config saved.")

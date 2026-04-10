@@ -31,6 +31,15 @@ def load_signals_df() -> pd.DataFrame:
             action,
             score,
             rr_estimated,
+            strategy_mode,
+            strategy_score,
+            news_bias,
+            news_sentiment,
+            news_impact,
+            news_score,
+            quantum_state,
+            quantum_coherence,
+            quantum_score,
             why
         FROM signals
         WHERE event_type = 'signal'
@@ -200,6 +209,33 @@ else:
 
 st.divider()
 
+st.subheader("Win Rate by Strategy")
+strategy_summary = summarize_by(valid, "strategy_mode")
+if strategy_summary.empty:
+    st.info("No strategy analytics yet.")
+else:
+    st.dataframe(strategy_summary, width="stretch")
+
+st.divider()
+
+st.subheader("Win Rate by News Bias")
+news_summary = summarize_by(valid, "news_bias")
+if news_summary.empty:
+    st.info("No news analytics yet.")
+else:
+    st.dataframe(news_summary, width="stretch")
+
+st.divider()
+
+st.subheader("Win Rate by Quantum State")
+quantum_summary = summarize_by(valid, "quantum_state")
+if quantum_summary.empty:
+    st.info("No quantum analytics yet.")
+else:
+    st.dataframe(quantum_summary, width="stretch")
+
+st.divider()
+
 st.subheader("Reviewed Signals Table")
 
 view_cols = [
@@ -212,6 +248,13 @@ view_cols = [
     "decision",
     "score",
     "rr_estimated",
+    "strategy_mode",
+    "strategy_score",
+    "news_bias",
+    "news_score",
+    "quantum_state",
+    "quantum_coherence",
+    "quantum_score",
     "note",
     "timestamp_review",
 ]

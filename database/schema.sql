@@ -36,6 +36,18 @@ CREATE TABLE IF NOT EXISTS signals (
     oi_now REAL,
     oi_change_pct REAL,
     crowding TEXT,
+    strategy_mode TEXT,
+    strategy_score INTEGER,
+    news_bias TEXT,
+    news_sentiment REAL,
+    news_impact REAL,
+    news_score INTEGER,
+    quantum_state TEXT,
+    quantum_coherence REAL,
+    quantum_phase_bias REAL,
+    quantum_interference REAL,
+    quantum_tunneling REAL,
+    quantum_score INTEGER,
     snapshot_path TEXT,
     ticket_path TEXT
 );

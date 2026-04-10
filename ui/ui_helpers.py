@@ -4,6 +4,8 @@ from typing import Optional, Tuple
 def squeeze_risk_label(
     price: Optional[float],
     liquidation_cluster: Optional[float],
+    high_pct: float = 0.002,
+    medium_pct: float = 0.005,
 ) -> Tuple[str, str]:
     """
     Returns (label, icon) based on distance between price and nearest liquidation cluster.
@@ -14,13 +16,14 @@ def squeeze_risk_label(
 
     dist_pct = abs(liquidation_cluster - price) / price
 
-    if dist_pct < 0.002:
+    if dist_pct < high_pct:
         return "SQUEEZE RISK HIGH", "🔴"
 
-    if dist_pct < 0.005:
+    if dist_pct < medium_pct:
         return "SQUEEZE RISK MEDIUM", "🟠"
 
     return "SQUEEZE RISK LOW", "🟢"
+
 
 def funding_bias_label(funding_rate):
     if funding_rate is None:
@@ -44,6 +47,7 @@ def oi_momentum_label(oi_change_pct):
     if oi_change_pct < -0.002:
         return "OI dropping", "🔹"
     return "OI flat", "⚪"
+
 
 def structure_read_label(context: str) -> tuple[str, str]:
     if context == "trend_clean":
@@ -101,6 +105,35 @@ def derivatives_read_label(crowding: str, funding_rate, oi_change_pct) -> tuple[
 
     return "Neutral derivatives", "⚪"
 
+
+def quantum_read_label(quantum_state: str, quantum_coherence, quantum_phase_bias) -> tuple[str, str]:
+    if not quantum_state or quantum_state == "N/A":
+        return "Quantum state unavailable", "⚪"
+
+    if quantum_state in ("COHERENT_BULLISH", "BULLISH_TUNNEL"):
+        return "Quantum bullish coherence", "🟢"
+    if quantum_state in ("COHERENT_BEARISH", "BEARISH_TUNNEL"):
+        return "Quantum bearish coherence", "🔴"
+    if quantum_state == "DECOHERENT":
+        return "Quantum decoherence", "🟠"
+    if quantum_state == "LOW_ENERGY":
+        return "Quantum low energy", "🔵"
+
+    try:
+        coherence = float(quantum_coherence)
+        phase = float(quantum_phase_bias)
+    except Exception:
+        return str(quantum_state).replace("_", " ").title(), "⚪"
+
+    if coherence >= 0.60:
+        if phase > 0:
+            return "Quantum aligned up", "🟢"
+        if phase < 0:
+            return "Quantum aligned down", "🔴"
+
+    return str(quantum_state).replace("_", " ").title(), "⚪"
+
+
 def grade_badge(score) -> tuple[str, str]:
     if score is None:
         return "N/A", "⚪"
@@ -140,6 +173,7 @@ def setup_state_label(decision: str, setup: str) -> tuple[str, str]:
         return "No setup", "⚪"
     return "Monitoring", "🔵"
 
+
 def final_verdict_text(
     context: str,
     action: str,
@@ -148,6 +182,8 @@ def final_verdict_text(
     score,
     rr_estimated,
     crowding: str,
+    rr_min_required: float = 1.5,
+    min_score_for_signal: int = 70,
 ) -> tuple[str, str]:
     """
     Returns (title, body) for a final dashboard verdict.
@@ -166,54 +202,60 @@ def final_verdict_text(
     if decision in ("BUY", "SELL"):
         return (
             "Signal active",
-            f"{decision} setup live. Context={context}. Action={action}. Score={score_val}, RR={rr_val}."
+            f"{decision} setup live. Context={context}. Action={action}. Score={score_val}, RR={rr_val}.",
         )
 
     if setup == "BLOCKED":
-        if rr_val is not None and rr_val < 1.5:
+        if rr_val is not None and rr_val < rr_min_required:
             return (
                 "Candidate blocked",
-                f"Setup exists but RR is too low ({rr_val:.2f}). Context={context}. Action={action}."
+                (
+                    f"Setup exists but RR is too low ({rr_val:.2f} < min {rr_min_required:.2f}). "
+                    f"Context={context}. Action={action}."
+                ),
             )
-        if score_val is not None and score_val < 70:
+        if score_val is not None and score_val < min_score_for_signal:
             return (
                 "Candidate blocked",
-                f"Setup exists but score is too low ({int(score_val)}). Context={context}. Action={action}."
+                (
+                    f"Setup exists but score is too low ({int(score_val)} < min {int(min_score_for_signal)}). "
+                    f"Context={context}. Action={action}."
+                ),
             )
         return (
             "Candidate blocked",
-            f"Setup detected but filters blocked execution. Context={context}. Action={action}."
+            f"Setup detected but filters blocked execution. Context={context}. Action={action}.",
         )
 
     if setup == "NONE":
         if context == "trend_clean":
             return (
                 "No trigger yet",
-                f"Structure is clean but there is no valid trigger yet. Action={action}."
+                f"Structure is clean but there is no valid trigger yet. Action={action}.",
             )
         if context == "trend_extended":
             return (
                 "Wait reset",
-                f"Trend is extended and no clean setup is active. Action={action}."
+                f"Trend is extended and no clean setup is active. Action={action}.",
             )
         if context == "transition":
             return (
                 "Wait structure",
-                f"Market is in transition. No reliable trigger yet. Action={action}."
+                f"Market is in transition. No reliable trigger yet. Action={action}.",
             )
         if context == "chop":
             return (
                 "Avoid noise",
-                f"Market is choppy and unreliable. Action={action}."
+                f"Market is choppy and unreliable. Action={action}.",
             )
 
     if crowding in ("crowded_longs", "crowded_shorts"):
         return (
             "Crowded derivatives",
-            f"Derivatives positioning looks crowded ({crowding}). Action={action}."
+            f"Derivatives positioning looks crowded ({crowding}). Action={action}.",
         )
 
     return (
         "Stand by",
-        f"Current read: context={context}, action={action}, setup={setup}."
+        f"Current read: context={context}, action={action}, setup={setup}.",
     )
