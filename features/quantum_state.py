@@ -35,6 +35,12 @@ def _safe_close_returns(df: pd.DataFrame, lookback: int) -> pd.Series:
     return pd.to_numeric(df["close"], errors="coerce").pct_change().dropna().tail(lookback)
 
 
+def _safe_all_close_returns(df: pd.DataFrame) -> pd.Series:
+    if "close" not in df.columns or len(df) < 3:
+        return pd.Series(dtype=float)
+    return pd.to_numeric(df["close"], errors="coerce").pct_change().dropna()
+
+
 def _clip01(value: float) -> float:
     return float(np.clip(value, 0.0, 1.0))
 
@@ -225,13 +231,20 @@ def build_quantum_state(
             state_confidence=0.0,
         )
 
-    m15_returns = _safe_close_returns(df_m15, 32)
-    h1_returns = _safe_close_returns(df_h1, 20)
-    h4_returns = _safe_close_returns(df_h4, 12)
+    m15_returns_recent = _safe_close_returns(df_m15, 32)
+    h1_returns_recent = _safe_close_returns(df_h1, 20)
+    h4_returns_recent = _safe_close_returns(df_h4, 12)
+    # Structural persistence uses long history; directional bias remains recent.
+    m15_returns_structural = _safe_all_close_returns(df_m15)
+    h1_returns_structural = _safe_all_close_returns(df_h1)
+    h4_returns_structural = _safe_all_close_returns(df_h4)
 
-    phase_m15, vol_m15, pers_m15 = _phase_vol_persistence(m15_returns)
-    phase_h1, vol_h1, pers_h1 = _phase_vol_persistence(h1_returns)
-    phase_h4, vol_h4, pers_h4 = _phase_vol_persistence(h4_returns)
+    phase_m15, vol_m15, _ = _phase_vol_persistence(m15_returns_recent)
+    phase_h1, vol_h1, _ = _phase_vol_persistence(h1_returns_recent)
+    phase_h4, vol_h4, _ = _phase_vol_persistence(h4_returns_recent)
+    pers_m15 = _persistence_score(m15_returns_structural)
+    pers_h1 = _persistence_score(h1_returns_structural)
+    pers_h4 = _persistence_score(h4_returns_structural)
 
     phases = np.array([phase_m15, phase_h1, phase_h4], dtype=float)
     vols = np.array([vol_m15, vol_h1, vol_h4], dtype=float)
