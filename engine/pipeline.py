@@ -365,6 +365,7 @@ class TradingEngine:
             volatility=market.volatility,
             setup_name=features.setup.setup,
             context=market.context,
+            decision=features.setup.decision,
         )
 
         ob_pts = 0

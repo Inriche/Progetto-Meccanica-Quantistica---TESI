@@ -1,5 +1,13 @@
 from dataclasses import dataclass
-from typing import List, Tuple
+import os
+from typing import Any, Dict, List, Optional, Tuple
+
+import pandas as pd
+
+MODEL_PATH = "out/model.joblib"
+
+_ML_ARTIFACT_CACHE: Optional[Dict[str, Any]] = None
+_ML_ARTIFACT_LOAD_ATTEMPTED = False
 
 
 @dataclass
@@ -7,6 +15,52 @@ class ScoreBreakdown:
     score: int
     grade: str
     components: List[Tuple[str, int]]
+
+
+def _load_ml_artifact() -> Optional[Dict[str, Any]]:
+    global _ML_ARTIFACT_CACHE, _ML_ARTIFACT_LOAD_ATTEMPTED
+    if _ML_ARTIFACT_LOAD_ATTEMPTED:
+        return _ML_ARTIFACT_CACHE
+
+    _ML_ARTIFACT_LOAD_ATTEMPTED = True
+    if not os.path.exists(MODEL_PATH):
+        _ML_ARTIFACT_CACHE = None
+        return None
+
+    try:
+        import joblib
+
+        artifact = joblib.load(MODEL_PATH)
+        if isinstance(artifact, dict) and "pipeline" in artifact:
+            _ML_ARTIFACT_CACHE = artifact
+            return artifact
+    except Exception:
+        _ML_ARTIFACT_CACHE = None
+        return None
+
+    _ML_ARTIFACT_CACHE = None
+    return None
+
+
+def _predict_ml_probability(feature_row: Dict[str, Any]) -> Optional[float]:
+    artifact = _load_ml_artifact()
+    if artifact is None:
+        return None
+
+    pipeline = artifact.get("pipeline")
+    feature_columns = artifact.get("feature_columns", [])
+    if pipeline is None or not feature_columns:
+        return None
+
+    try:
+        data = {col: feature_row.get(col) for col in feature_columns}
+        X = pd.DataFrame([data])
+        proba = pipeline.predict_proba(X)
+        if proba is None or len(proba) == 0:
+            return None
+        return float(proba[0][1])
+    except Exception:
+        return None
 
 
 def compute_score(
@@ -17,9 +71,10 @@ def compute_score(
     volatility: str,
     setup_name: str,
     context: str = "transition",
+    decision: str = "UNKNOWN",
 ) -> ScoreBreakdown:
     score = 0
-    comps = []
+    comps: List[Tuple[str, int]] = []
 
     # Bias alignment
     if combined in ("bullish", "bearish"):
@@ -76,7 +131,25 @@ def compute_score(
         score -= 5
         comps.append(("context_transition", -5))
 
-    score = max(0, min(100, score))
+    heuristic_score = max(0, min(100, score))
+
+    ml_probability = _predict_ml_probability(
+        {
+            "rr_estimated": rr_est,
+            "setup": setup_name,
+            "context": context,
+            "decision": decision,
+        }
+    )
+
+    if ml_probability is not None:
+        ml_score = max(0, min(100, int(round(float(ml_probability) * 100.0))))
+        final_score = int(round((0.65 * heuristic_score) + (0.35 * ml_score)))
+        comps.append(("ml_adjustment", int(final_score - heuristic_score)))
+        score = max(0, min(100, final_score))
+    else:
+        score = heuristic_score
+
     grade = "A" if score >= 80 else ("B" if score >= 70 else "C")
 
     return ScoreBreakdown(score=score, grade=grade, components=comps)

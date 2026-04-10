@@ -4,3 +4,5 @@ websockets==12.0
 matplotlib==3.9.2
 python-dateutil==2.9.0.post0
 requests==2.32.3
+scikit-learn==1.5.2
+joblib==1.4.2
