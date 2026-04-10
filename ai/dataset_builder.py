@@ -29,7 +29,7 @@ def _load_signal_feature_rows(db_path: str, limit: Optional[int] = None) -> pd.D
             s.signal_id,
             s.timestamp,
             s.symbol,
-            dl.trigger,
+            NULL AS trigger,
             s.decision,
             s.setup,
             s.context,
@@ -61,9 +61,6 @@ def _load_signal_feature_rows(db_path: str, limit: Optional[int] = None) -> pd.D
             s.quantum_score,
             s.ticket_path
         FROM signals s
-        LEFT JOIN decision_logs dl
-            ON dl.ticket_path = s.ticket_path
-           AND dl.decision = s.decision
         WHERE s.event_type = 'signal'
           AND s.decision IN ('BUY', 'SELL')
         ORDER BY s.id ASC
@@ -90,13 +87,14 @@ def _load_signal_feature_rows(db_path: str, limit: Optional[int] = None) -> pd.D
 def _derive_label(validation_status: str, outcome_status: str) -> Optional[int]:
     """
     Supervised label built from existing market validation logic:
-    1 = validated directional signal, 0 = invalidated signal, None = uncertain.
+    1 = validated directional signal, 0 = non-desirable outcome, None = uncertain.
+    Mixed/no clear follow-through cases are treated as non-desirable for supervised training.
     """
     v = str(validation_status).lower()
     o = str(outcome_status).lower()
     if v == "validated" or o in {"tp1_hit", "tp2_hit"}:
         return 1
-    if v == "invalidated" or o == "sl_hit":
+    if v in {"invalidated", "mixed"} or o == "sl_hit":
         return 0
     return None
 
@@ -198,7 +196,8 @@ def build_training_dataset(
         "validation_status",
         "outcome_status",
     ]
-    existing_columns = [c for c in ordered_columns if c in labeled_df.columns]
+    unique_ordered_columns = list(dict.fromkeys(ordered_columns))
+    existing_columns = [c for c in unique_ordered_columns if c in labeled_df.columns]
     dataset_df = labeled_df[existing_columns].copy()
 
     os.makedirs(os.path.dirname(output_csv_path) or ".", exist_ok=True)
