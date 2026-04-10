@@ -52,12 +52,14 @@ def _build_periodic_returns_from_equity(
     if tmp.empty:
         return pd.Series(dtype=float), "equity curve contains only non-finite values"
 
-    series = tmp.sort_values("timestamp").groupby("timestamp", as_index=True)["equity"].last()
-    if len(series) < 2:
+    tmp = tmp.sort_values("timestamp").set_index("timestamp")
+    if len(tmp) < 2:
         return pd.Series(dtype=float), "equity curve has fewer than 2 points"
 
+    series = tmp["equity"]
     if periodic_freq:
-        series = series.resample(periodic_freq).last().ffill()
+        series = series.resample(periodic_freq).last()
+    series = series.ffill()
 
     returns = series.pct_change()
     returns = returns.replace([float("inf"), float("-inf")], pd.NA).dropna()
@@ -158,13 +160,30 @@ def _one_sample_t_test_pvalue(returns: pd.Series) -> tuple[Optional[float], Opti
     return float(t_stat), p_value
 
 
+def _compute_buy_hold_return_from_prices(
+    market_start_price: Optional[float],
+    market_end_price: Optional[float],
+) -> Optional[float]:
+    if market_start_price is None or market_end_price is None:
+        return None
+    try:
+        start = float(market_start_price)
+        end = float(market_end_price)
+    except Exception:
+        return None
+    if not math.isfinite(start) or not math.isfinite(end) or start <= 0:
+        return None
+    return float((end / start) - 1.0)
+
+
 def compute_backtest_metrics(
     trades_df: pd.DataFrame,
     equity_curve_df: pd.DataFrame,
     *,
     initial_capital: float,
     annualization_factor: float = 1.0,
-    buy_hold_return: Optional[float] = None,
+    market_start_price: Optional[float] = None,
+    market_end_price: Optional[float] = None,
     periodic_freq: str = "15min",
 ) -> BacktestMetrics:
     net_pnl = _safe_series(trades_df, "net_pnl")
@@ -192,11 +211,13 @@ def compute_backtest_metrics(
     max_drawdown = _compute_max_drawdown(equity)
     sharpe_ratio = _compute_sharpe(returns, annualization_factor=annualization_factor)
     sortino_ratio = _compute_sortino(returns, annualization_factor=annualization_factor)
+    # p-value is computed on periodic equity-curve returns, not on per-trade returns.
     periodic_returns, periodic_note = _build_periodic_returns_from_equity(
         equity_curve_df,
         periodic_freq=periodic_freq,
     )
     _, p_value = _one_sample_t_test_pvalue(periodic_returns)
+    buy_hold_return = _compute_buy_hold_return_from_prices(market_start_price, market_end_price)
     outperformance = None if buy_hold_return is None else float(total_return - float(buy_hold_return))
 
     return BacktestMetrics(

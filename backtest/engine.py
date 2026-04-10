@@ -223,21 +223,21 @@ def _iso_to_ms(ts: Any) -> Optional[int]:
         return None
 
 
-def _compute_buy_hold_return(
+def _load_market_period_prices(
     *,
     db_path: str,
     timeframe: str,
     symbol: Optional[str],
     start_ts: Any,
     end_ts: Any,
-) -> Optional[float]:
+) -> tuple[Optional[float], Optional[float]]:
     start_ms = _iso_to_ms(start_ts)
     end_ms = _iso_to_ms(end_ts)
     if start_ms is None or end_ms is None or end_ms < start_ms:
-        return None
+        return None, None
 
     if not os.path.exists(db_path):
-        return None
+        return None, None
 
     conn = _get_conn(db_path)
     where = [
@@ -259,15 +259,12 @@ def _compute_buy_hold_return(
     df = pd.read_sql_query(query, conn, params=params)
     conn.close()
 
-    if df.empty or len(df) < 2:
-        return None
+    if df.empty:
+        return None, None
 
     first_close = _coerce_float(df["close"].iloc[0])
     last_close = _coerce_float(df["close"].iloc[-1])
-    if first_close is None or last_close is None or first_close <= 0:
-        return None
-
-    return float((last_close / first_close) - 1.0)
+    return first_close, last_close
 
 
 def _simulate_single_trade(
@@ -384,7 +381,8 @@ def run_backtest(config: BacktestConfig, inputs_df: Optional[pd.DataFrame] = Non
             empty_trades,
             equity_curve_df,
             initial_capital=config.portfolio.initial_capital,
-            buy_hold_return=None,
+            market_start_price=None,
+            market_end_price=None,
             periodic_freq=_timeframe_to_pandas_freq(config.timeframe),
         )
         return BacktestResult(
@@ -424,9 +422,10 @@ def run_backtest(config: BacktestConfig, inputs_df: Optional[pd.DataFrame] = Non
     if symbol_for_benchmark is None and "symbol" in signals_df.columns and not signals_df.empty:
         symbol_for_benchmark = str(signals_df.iloc[0]["symbol"])
 
-    buy_hold_return = None
+    market_start_price = None
+    market_end_price = None
     if start_ts is not None and end_ts is not None:
-        buy_hold_return = _compute_buy_hold_return(
+        market_start_price, market_end_price = _load_market_period_prices(
             db_path=config.db_path,
             timeframe=config.timeframe,
             symbol=symbol_for_benchmark,
@@ -438,7 +437,8 @@ def run_backtest(config: BacktestConfig, inputs_df: Optional[pd.DataFrame] = Non
         trades_df,
         equity_curve_df,
         initial_capital=config.portfolio.initial_capital,
-        buy_hold_return=buy_hold_return,
+        market_start_price=market_start_price,
+        market_end_price=market_end_price,
         periodic_freq=_timeframe_to_pandas_freq(config.timeframe),
     )
 
