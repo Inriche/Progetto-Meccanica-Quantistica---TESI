@@ -258,6 +258,76 @@ with st.form("tune_engine_form"):
         step=1,
     )
 
+    st.divider()
+    st.subheader("Alerts")
+
+    alerts_enabled = st.checkbox(
+        "Enable Alerts",
+        value=bool(cfg.get("alerts_enabled", True)),
+    )
+
+    alert_min_score = st.number_input(
+        "Live Signal Alert Min Score",
+        min_value=0,
+        max_value=100,
+        value=int(cfg.get("alert_min_score", 74)),
+        step=1,
+    )
+
+    blocked_alert_min_score = st.number_input(
+        "Blocked Candidate Alert Min Score",
+        min_value=0,
+        max_value=100,
+        value=int(cfg.get("blocked_alert_min_score", 68)),
+        step=1,
+    )
+
+    news_alert_min_impact = st.number_input(
+        "News Alert Min Impact",
+        min_value=0.0,
+        max_value=1.0,
+        value=float(cfg.get("news_alert_min_impact", 0.70)),
+        step=0.01,
+        format="%.2f",
+    )
+
+    alert_cooldown_minutes = st.number_input(
+        "Alert Cooldown Minutes",
+        min_value=1,
+        max_value=1440,
+        value=int(cfg.get("alert_cooldown_minutes", 30)),
+        step=1,
+    )
+
+    st.divider()
+    st.subheader("Market Read Validation")
+
+    validation_horizon_bars = st.number_input(
+        "Validation Horizon Bars (M15)",
+        min_value=2,
+        max_value=200,
+        value=int(cfg.get("validation_horizon_bars", 16)),
+        step=1,
+    )
+
+    validation_min_follow_through_pct = st.number_input(
+        "Validation Min Follow Through %",
+        min_value=0.0005,
+        max_value=0.05,
+        value=float(cfg.get("validation_min_follow_through_pct", 0.0035)),
+        step=0.0005,
+        format="%.4f",
+    )
+
+    validation_max_adverse_pct = st.number_input(
+        "Validation Max Adverse %",
+        min_value=0.0005,
+        max_value=0.05,
+        value=float(cfg.get("validation_max_adverse_pct", 0.0025)),
+        step=0.0005,
+        format="%.4f",
+    )
+
     submitted = st.form_submit_button("Save Runtime Config")
 
     if submitted:
@@ -279,6 +349,14 @@ with st.form("tune_engine_form"):
                 "news_enabled": bool(news_enabled),
                 "news_cache_minutes": int(news_cache_minutes),
                 "news_headline_limit": int(news_headline_limit),
+                "alerts_enabled": bool(alerts_enabled),
+                "alert_min_score": int(alert_min_score),
+                "blocked_alert_min_score": int(blocked_alert_min_score),
+                "news_alert_min_impact": float(news_alert_min_impact),
+                "alert_cooldown_minutes": int(alert_cooldown_minutes),
+                "validation_horizon_bars": int(validation_horizon_bars),
+                "validation_min_follow_through_pct": float(validation_min_follow_through_pct),
+                "validation_max_adverse_pct": float(validation_max_adverse_pct),
             }
         )
         st.success("Runtime config saved.")

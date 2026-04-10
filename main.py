@@ -8,6 +8,7 @@ from dateutil import tz
 from config import CONFIG
 
 from runtime.runtime_config import load_runtime_config
+from runtime.alert_engine import emit_alert
 
 from database.db import DB
 from data.data_store import DataStore, Candle
@@ -283,6 +284,143 @@ async def main():
                 "ticket_path": ticket_path,
             }
         )
+
+    def maybe_emit_news_regime_alert(
+        *,
+        now,
+        runtime_cfg,
+        news,
+        context,
+        action,
+        strategy_code,
+        trigger,
+    ) -> None:
+        if not bool(runtime_cfg.get("alerts_enabled", True)):
+            return
+
+        impact_threshold = float(runtime_cfg.get("news_alert_min_impact", 0.70))
+        if float(news.impact_score) < impact_threshold:
+            return
+
+        if str(news.bias) not in ("bullish", "bearish", "high_alert"):
+            return
+
+        severity = "critical" if float(news.impact_score) >= 0.85 else "warning"
+        emit_alert(
+            alert_type="news_regime",
+            title=f"High-impact news regime ({news.bias})",
+            body=(
+                f"Topic={news.dominant_topic} | impact={news.impact_score:.2f} "
+                f"| sentiment={news.sentiment_score:.2f} | ctx={context} | action={action} "
+                f"| strategy={strategy_code} | trigger={trigger}"
+            ),
+            severity=severity,
+            created_at=now,
+            dedup_key=f"news:{CONFIG.symbol.upper()}:{news.bias}:{news.dominant_topic}",
+            cooldown_minutes=int(runtime_cfg.get("alert_cooldown_minutes", 30)),
+            metadata={
+                "symbol": CONFIG.symbol.upper(),
+                "news_bias": news.bias,
+                "news_impact": news.impact_score,
+                "news_sentiment": news.sentiment_score,
+                "dominant_topic": news.dominant_topic,
+                "headline_count": news.headline_count,
+                "strategy_mode": strategy_code,
+                "context": context,
+                "action": action,
+                "trigger": trigger,
+            },
+        )
+
+    def maybe_emit_trade_alerts(
+        *,
+        now,
+        runtime_cfg,
+        trigger,
+        ticket_id,
+        ticket_path,
+        decision,
+        setup_name,
+        action,
+        score,
+        rr_est,
+        latest_price,
+        strategy_profile,
+        strategy_pts,
+        news,
+        news_pts,
+        quantum,
+        quant_pts,
+        context,
+        squeeze_risk,
+        risk_status,
+        why_text,
+    ) -> None:
+        if not bool(runtime_cfg.get("alerts_enabled", True)):
+            return
+
+        cooldown_minutes = int(runtime_cfg.get("alert_cooldown_minutes", 30))
+        rr_text = "N/A" if rr_est is None else f"{rr_est:.2f}"
+        base_metadata = {
+            "symbol": CONFIG.symbol.upper(),
+            "decision": decision,
+            "setup": setup_name,
+            "action": action,
+            "score": score,
+            "rr_estimated": rr_est,
+            "price": latest_price,
+            "strategy_mode": strategy_profile.code,
+            "strategy_score": strategy_pts,
+            "news_bias": news.bias,
+            "news_impact": news.impact_score,
+            "news_score": news_pts,
+            "quantum_state": quantum.state,
+            "quantum_coherence": quantum.coherence,
+            "quantum_score": quant_pts,
+            "context": context,
+            "squeeze_risk": squeeze_risk,
+            "risk_can_emit": risk_status.get("can_emit"),
+            "risk_block_reason": risk_status.get("block_reason"),
+            "trigger": trigger,
+            "ticket_path": ticket_path,
+            "why": why_text,
+        }
+
+        if decision in ("BUY", "SELL") and int(score) >= int(runtime_cfg.get("alert_min_score", 74)):
+            severity = "critical" if int(score) >= 85 else "info"
+            emit_alert(
+                alert_type="signal_live",
+                title=f"{decision} signal live ({setup_name})",
+                body=(
+                    f"score={score} | rr={rr_text}"
+                    f" | strategy={strategy_profile.code} | news={news.bias}/{news.impact_score:.2f}"
+                    f" | quantum={quantum.state}/{quantum.coherence:.2f}"
+                    f" | action={action}"
+                ),
+                severity=severity,
+                created_at=now,
+                dedup_key=f"signal:{CONFIG.symbol.upper()}:{decision}:{setup_name}:{strategy_profile.code}",
+                cooldown_minutes=cooldown_minutes,
+                signal_id=ticket_id,
+                metadata=base_metadata,
+            )
+
+        elif setup_name == "BLOCKED" and int(score) >= int(runtime_cfg.get("blocked_alert_min_score", 68)):
+            emit_alert(
+                alert_type="blocked_candidate",
+                title="Strong candidate blocked",
+                body=(
+                    f"setup={setup_name} | score={score} | rr={rr_text} "
+                    f"| block_reason={risk_status.get('block_reason')} | strategy={strategy_profile.code} "
+                    f"| action={action}"
+                ),
+                severity="warning",
+                created_at=now,
+                dedup_key=f"blocked:{CONFIG.symbol.upper()}:{setup_name}:{strategy_profile.code}",
+                cooldown_minutes=cooldown_minutes,
+                signal_id=ticket_id,
+                metadata=base_metadata,
+            )
 
     async def analyze_and_emit(trigger: str):
         runtime_cfg = load_runtime_config()
@@ -617,6 +755,16 @@ async def main():
                 quantum_score=0,
             )
 
+            maybe_emit_news_regime_alert(
+                now=now,
+                runtime_cfg=runtime_cfg,
+                news=news,
+                context=ctx,
+                action=action,
+                strategy_code=strategy_profile.code,
+                trigger=trigger,
+            )
+
             print(f"[ANALYZE:{trigger}] FLAT (no setup)")
             return
 
@@ -765,6 +913,40 @@ async def main():
                 "snapshot_path": snapshot_path,
                 "ticket_path": ticket_path,
             }
+        )
+
+        maybe_emit_trade_alerts(
+            now=now,
+            runtime_cfg=runtime_cfg,
+            trigger=trigger,
+            ticket_id=ticket.payload["id"],
+            ticket_path=ticket_path,
+            decision=decision,
+            setup_name=setup_name,
+            action=action,
+            score=score,
+            rr_est=rr_est,
+            latest_price=latest_price,
+            strategy_profile=strategy_profile,
+            strategy_pts=strategy_pts,
+            news=news,
+            news_pts=news_pts,
+            quantum=quantum,
+            quant_pts=quant_pts,
+            context=ctx,
+            squeeze_risk=squeeze_risk,
+            risk_status=risk_status_after_emit,
+            why_text=why_text,
+        )
+
+        maybe_emit_news_regime_alert(
+            now=now,
+            runtime_cfg=runtime_cfg,
+            news=news,
+            context=ctx,
+            action=action,
+            strategy_code=strategy_profile.code,
+            trigger=trigger,
         )
 
         print("=" * 90)

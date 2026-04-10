@@ -7,6 +7,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from runtime.alert_engine import load_latest_alert
 from runtime.runtime_config import load_runtime_config
 from ui.ui_helpers import (
     derivatives_read_label,
@@ -21,6 +22,7 @@ from ui.ui_helpers import (
     squeeze_risk_label,
     structure_read_label,
 )
+from validation.market_read import load_market_read_df, summarize_market_read
 
 DB_PATH = "out/assistant.db"
 TICKETS_DIR = Path("out/tickets")
@@ -235,6 +237,14 @@ latest_ticket = load_latest_ticket()
 latest_snapshot = load_latest_snapshot()
 recent_df = load_recent_events(limit=15)
 runtime_cfg = load_runtime_config()
+latest_alert = load_latest_alert()
+market_read_df = load_market_read_df(
+    limit=40,
+    horizon_bars=int(runtime_cfg.get("validation_horizon_bars", 16)),
+    min_follow_through_pct=float(runtime_cfg.get("validation_min_follow_through_pct", 0.0035)),
+    max_adverse_pct=float(runtime_cfg.get("validation_max_adverse_pct", 0.0025)),
+)
+market_read_summary = summarize_market_read(market_read_df)
 
 if latest_event is None:
     st.warning("No events found yet.")
@@ -286,6 +296,56 @@ with meta2:
 with meta3:
     news_score_val = latest_event.get("news_score")
     st.metric("News Score", "N/A" if news_score_val is None or pd.isna(news_score_val) else int(news_score_val))
+
+st.divider()
+
+st.subheader("Alerts And Validation")
+
+av1, av2, av3, av4 = st.columns(4)
+
+with av1:
+    st.metric(
+        "Validated Rate",
+        "N/A" if market_read_summary["validation_rate"] is None else f"{market_read_summary['validation_rate']:.2f}%",
+    )
+
+with av2:
+    st.metric(
+        "Avg Read Score",
+        "N/A" if market_read_summary["avg_read_score"] is None else market_read_summary["avg_read_score"],
+    )
+
+with av3:
+    st.metric(
+        "Validated / Completed",
+        f"{market_read_summary['validated']}/{market_read_summary['completed']}",
+    )
+
+with av4:
+    if latest_alert is None:
+        st.metric("Latest Alert", "none")
+    else:
+        st.metric("Latest Alert", str(latest_alert.get("type", "N/A")))
+
+if latest_alert is not None:
+    st.markdown(
+        f"""
+        **Alert Severity:** {latest_alert.get("severity", "N/A")}  
+        **Alert Title:** {latest_alert.get("title", "N/A")}  
+        **Alert Body:** {latest_alert.get("body", "N/A")}
+        """
+    )
+
+completed_reads = market_read_df[market_read_df["validation_status"].isin(["validated", "invalidated", "mixed"])] if not market_read_df.empty else pd.DataFrame()
+if not completed_reads.empty:
+    latest_read = completed_reads.iloc[0]
+    st.markdown(
+        f"""
+        **Latest Completed Read:** {latest_read.get("validation_status", "N/A")}  
+        **Read Score:** {latest_read.get("read_score", "N/A")}  
+        **Validation Note:** {latest_read.get("validation_note", "N/A")}
+        """
+    )
 
 st.divider()
 
