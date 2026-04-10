@@ -143,6 +143,45 @@ class TradingEngine:
         self.timezone = timezone
         self.logger = logging.getLogger("engine.pipeline")
 
+    def _quantum_frame(
+        self,
+        *,
+        timeframe: str,
+        base_df: pd.DataFrame,
+        min_rows: int = 150,
+    ) -> pd.DataFrame:
+        """
+        Prefer in-memory full buffers; if too short, fallback to DB candles to reach
+        a structural window length for persistence/Hurst when available.
+        """
+        if len(base_df) >= min_rows:
+            return base_df.copy()
+
+        conn = getattr(self.db, "conn", None)
+        if conn is None:
+            return base_df.copy()
+
+        try:
+            query = """
+                SELECT open_time, close_time, open, high, low, close, volume
+                FROM candles
+                WHERE timeframe = ?
+                  AND UPPER(symbol) = UPPER(?)
+                ORDER BY open_time DESC
+                LIMIT ?
+            """
+            hist = pd.read_sql_query(
+                query,
+                conn,
+                params=(timeframe, self.symbol, int(min_rows)),
+            )
+            if hist.empty:
+                return base_df.copy()
+            hist = hist.sort_values("open_time").drop_duplicates(subset=["open_time"], keep="last")
+            return hist.copy()
+        except Exception:
+            return base_df.copy()
+
     async def run_cycle(self, trigger: str) -> EngineCycleResult:
         market = self.load_market_state(trigger=trigger)
         if not self._has_min_history(market.df_m15, market.df_h1, market.df_h4):
@@ -204,13 +243,17 @@ class TradingEngine:
         df_m15 = self.store.to_df("15m")
         df_h1 = self.store.to_df("1h")
         df_h4 = self.store.to_df("4h")
+        quantum_df_m15 = self._quantum_frame(timeframe="15m", base_df=df_m15, min_rows=150)
+        quantum_df_h1 = self._quantum_frame(timeframe="1h", base_df=df_h1, min_rows=150)
+        quantum_df_h4 = self._quantum_frame(timeframe="4h", base_df=df_h4, min_rows=150)
 
         bias_h1 = detect_bias_h1(df_h1) if len(df_h1) > 0 else "neutral"
         bias_h4 = detect_bias_h4(df_h4) if len(df_h4) > 0 else "neutral"
         bias_comb = combined_bias(bias_h1, bias_h4)
         volatility = volatility_regime(df_m15) if len(df_m15) > 0 else "low"
         context = classify_market_context(df_m15, df_h1, df_h4) if len(df_m15) > 0 else "transition"
-        quantum = build_quantum_state(df_m15, df_h1, df_h4)
+        # Structural persistence may require longer history than short-term bias features.
+        quantum = build_quantum_state(quantum_df_m15, quantum_df_h1, quantum_df_h4)
 
         liq_data = fetch_liquidation_map("BTC")
         liquidation_cluster = None
