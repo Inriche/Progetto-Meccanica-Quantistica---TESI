@@ -63,7 +63,21 @@ def _predict_ml_probability(feature_row: Dict[str, Any]) -> Optional[float]:
         proba = pipeline.predict_proba(X)
         if proba is None or len(proba) == 0:
             return None
-        return float(proba[0][1])
+
+        classes = getattr(pipeline, "classes_", None)
+        if classes is None:
+            classifier = getattr(pipeline, "named_steps", {}).get("classifier")
+            classes = getattr(classifier, "classes_", None)
+        if classes is None:
+            return None
+
+        classes_list = list(classes)
+        if 1 not in classes_list:
+            return None
+        positive_idx = classes_list.index(1)
+        if positive_idx >= len(proba[0]):
+            return None
+        return float(proba[0][positive_idx])
     except Exception:
         return None
 
