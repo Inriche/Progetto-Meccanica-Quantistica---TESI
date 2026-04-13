@@ -194,6 +194,13 @@ def _parse_min_scores_arg(value: Optional[str]) -> list[Optional[float]]:
     return scores
 
 
+def _parse_modes_arg(value: Optional[str]) -> list[str]:
+    if value is None:
+        return []
+    parts = [p.strip().lower() for p in str(value).split(",")]
+    return [p for p in parts if p in MODES]
+
+
 def _filter_test_period(df: pd.DataFrame, *, test_start: pd.Timestamp, test_end: pd.Timestamp) -> pd.DataFrame:
     if df.empty:
         return df.copy()
@@ -224,6 +231,7 @@ def compare_scoring_modes(
     max_notional_fraction: float,
     fee_rate: float,
     slippage_bps: float,
+    modes: Optional[list[str]] = None,
 ) -> pd.DataFrame:
     start_ts = _parse_timestamp(test_start)
     end_ts = _parse_timestamp(test_end)
@@ -263,9 +271,12 @@ def compare_scoring_modes(
     thresholds = [s for s in (min_scores or [min_score])]
     if not thresholds:
         thresholds = [None]
+    selected_modes = [m for m in (modes or list(MODES)) if m in MODES]
+    if not selected_modes:
+        selected_modes = list(MODES)
 
     for threshold in thresholds:
-        for mode in MODES:
+        for mode in selected_modes:
             mode_inputs = _apply_mode_scores(base_inputs, mode=mode, artifact=artifact)
             print(f"[compare_scoring_modes] threshold={threshold} mode={mode} after_mode_score={len(mode_inputs)}")
             mode_inputs = _apply_score_threshold(mode_inputs, min_score=threshold)
@@ -326,6 +337,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--output-json", default=DEFAULT_OUTPUT_JSON)
     parser.add_argument("--min-score", type=float, default=70.0)
     parser.add_argument("--min-scores", default=None, help="Comma-separated score thresholds, e.g. 40,50,60,70")
+    parser.add_argument("--modes", default=None, help="Comma-separated modes, e.g. heuristic,hybrid,ml")
     parser.add_argument("--timeframe", default="15m")
     parser.add_argument("--horizon-bars", type=int, default=24)
     parser.add_argument("--initial-capital", type=float, default=10_000.0)
@@ -339,6 +351,7 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     min_scores = _parse_min_scores_arg(args.min_scores)
+    selected_modes = _parse_modes_arg(args.modes)
     out_df = compare_scoring_modes(
         db_path=str(args.db_path),
         symbol=None if args.symbol in (None, "", "None") else str(args.symbol),
@@ -357,6 +370,7 @@ def main() -> None:
         max_notional_fraction=float(args.max_notional_fraction),
         fee_rate=float(args.fee_rate),
         slippage_bps=float(args.slippage_bps),
+        modes=selected_modes if selected_modes else None,
     )
     print(out_df.to_string(index=False))
     print(f"[compare_scoring_modes] csv={args.output_csv} json={args.output_json}")

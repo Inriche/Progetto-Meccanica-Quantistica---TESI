@@ -14,7 +14,7 @@ try:
     from sklearn.impute import SimpleImputer
     from sklearn.linear_model import LogisticRegression
     from sklearn.pipeline import Pipeline
-    from sklearn.preprocessing import OneHotEncoder
+    from sklearn.preprocessing import OneHotEncoder, RobustScaler
 except Exception as exc:  # pragma: no cover - handled at runtime
     raise RuntimeError(
         "Missing ML dependencies. Install scikit-learn and joblib before training."
@@ -205,6 +205,7 @@ def train_first_model(
                 Pipeline(
                     steps=[
                         ("imputer", SimpleImputer(missing_values=np.nan, strategy="median")),
+                        ("scaler", RobustScaler()),
                     ]
                 ),
                 numeric_features,
