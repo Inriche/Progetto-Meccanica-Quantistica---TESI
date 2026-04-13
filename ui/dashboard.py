@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from runtime.alert_engine import load_latest_alert
-from runtime.runtime_config import load_runtime_config
+from runtime.runtime_config import load_runtime_config, save_runtime_config
 from ui.ui_helpers import (
     derivatives_read_label,
     final_verdict_text,
@@ -28,6 +28,7 @@ DB_PATH = "out/assistant.db"
 TICKETS_DIR = Path("out/tickets")
 SNAPSHOTS_DIR = Path("out/snapshots")
 COMMANDS_FILE = Path("out/commands.txt")
+SCORING_MODES = ("heuristic", "hybrid", "ml")
 
 
 st.set_page_config(
@@ -152,6 +153,22 @@ def send_command(cmd: str):
         f.write(cmd.strip().lower() + "\n")
 
 
+def normalize_scoring_mode(value) -> str:
+    mode = str(value or "").strip().lower()
+    return mode if mode in SCORING_MODES else "hybrid"
+
+
+def save_scoring_mode(mode: str) -> bool:
+    cfg = load_runtime_config()
+    target_mode = normalize_scoring_mode(mode)
+    current_mode = normalize_scoring_mode(cfg.get("scoring_mode"))
+    if current_mode == target_mode:
+        return False
+    cfg["scoring_mode"] = target_mode
+    save_runtime_config(cfg)
+    return True
+
+
 def color_badge(label: str, value: str):
     palette = {
         "READY_IF_TRIGGER": "#16a34a",
@@ -232,11 +249,30 @@ with top3:
         send_command("s")
         st.success("Status command queued.")
 
+runtime_cfg = load_runtime_config()
+active_scoring_mode = normalize_scoring_mode(runtime_cfg.get("scoring_mode"))
+
+sm1, sm2 = st.columns([1, 2])
+with sm1:
+    selected_scoring_mode = st.selectbox(
+        "Scoring Approach",
+        options=list(SCORING_MODES),
+        index=list(SCORING_MODES).index(active_scoring_mode),
+        key="scoring_mode_selector",
+    )
+with sm2:
+    st.markdown(f"**Active Scoring Mode:** `{active_scoring_mode}`")
+    st.caption("La modifica viene salvata in `out/config_runtime.json` e applicata nei cicli successivi.")
+
+if selected_scoring_mode != active_scoring_mode:
+    if save_scoring_mode(selected_scoring_mode):
+        st.success(f"Scoring mode aggiornato a `{selected_scoring_mode}`.")
+        st.rerun()
+
 latest_event = load_latest_event()
 latest_ticket = load_latest_ticket()
 latest_snapshot = load_latest_snapshot()
 recent_df = load_recent_events(limit=15)
-runtime_cfg = load_runtime_config()
 latest_alert = load_latest_alert()
 market_read_df = load_market_read_df(
     limit=40,

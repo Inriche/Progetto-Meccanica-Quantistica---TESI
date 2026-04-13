@@ -27,6 +27,7 @@ DEFAULT_RUNTIME_CONFIG = {
     "quantum_tunneling_threshold": 0.70,
 
     "strategy_mode": "BALANCED",
+    "scoring_mode": "hybrid",
     "news_enabled": True,
     "news_cache_minutes": 15,
     "news_headline_limit": 6,

@@ -3,6 +3,7 @@ import os
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
+from runtime.runtime_config import load_runtime_config
 
 MODEL_PATH = "out/model.joblib"
 # Scoring mode:
@@ -10,6 +11,7 @@ MODEL_PATH = "out/model.joblib"
 # - "hybrid": blend heuristic + ML probability
 # - "ml": ML-only when model is available, otherwise safe heuristic fallback
 SCORING_MODE = os.getenv("SCORING_MODE", "hybrid").strip().lower()
+_SCORING_MODES = {"heuristic", "hybrid", "ml"}
 
 _ML_ARTIFACT_CACHE: Optional[Dict[str, Any]] = None
 _ML_ARTIFACT_LOAD_ATTEMPTED = False
@@ -20,6 +22,27 @@ class ScoreBreakdown:
     score: int
     grade: str
     components: List[Tuple[str, int]]
+
+
+def _normalize_mode(value: Any) -> str:
+    mode = str(value or "").strip().lower()
+    return mode if mode in _SCORING_MODES else "hybrid"
+
+
+def _resolve_scoring_mode() -> str:
+    env_mode = os.getenv("SCORING_MODE", "").strip().lower()
+    if env_mode in _SCORING_MODES:
+        return env_mode
+
+    try:
+        cfg = load_runtime_config()
+        cfg_mode = _normalize_mode(cfg.get("scoring_mode"))
+        if cfg_mode in _SCORING_MODES:
+            return cfg_mode
+    except Exception:
+        pass
+
+    return _normalize_mode(SCORING_MODE)
 
 
 def _load_ml_artifact() -> Optional[Dict[str, Any]]:
@@ -161,7 +184,7 @@ def compute_score(
         }
     )
 
-    mode = SCORING_MODE if SCORING_MODE in {"heuristic", "hybrid", "ml"} else "hybrid"
+    mode = _resolve_scoring_mode()
     if mode == "heuristic":
         score = heuristic_score
     elif ml_probability is None:

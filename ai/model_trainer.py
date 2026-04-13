@@ -23,16 +23,114 @@ except Exception as exc:  # pragma: no cover - handled at runtime
 DEFAULT_DATASET_PATH = "out/training_dataset.csv"
 DEFAULT_MODEL_PATH = "out/model.joblib"
 
-FEATURE_COLUMNS = ["rr_estimated", "setup", "context", "decision"]
+FEATURE_SET_DEFINITIONS: dict[str, list[str]] = {
+    "base": [
+        "rr_estimated",
+        "setup",
+        "context",
+        "decision",
+    ],
+    "base_quantum": [
+        "rr_estimated",
+        "setup",
+        "context",
+        "decision",
+        "quantum_state",
+        "quantum_coherence",
+        "quantum_phase_bias",
+        "quantum_interference",
+        "quantum_tunneling",
+        "quantum_score",
+    ],
+    "base_microstructure": [
+        "rr_estimated",
+        "setup",
+        "context",
+        "decision",
+        "ob_imbalance",
+        "ob_raw",
+        "ob_age_ms",
+    ],
+    "base_news": [
+        "rr_estimated",
+        "setup",
+        "context",
+        "decision",
+        "news_bias",
+        "news_sentiment",
+        "news_impact",
+        "news_score",
+        "funding_rate",
+        "oi_now",
+        "oi_change_pct",
+        "crowding",
+        "strategy_mode",
+        "strategy_score",
+    ],
+    "full": [
+        "rr_estimated",
+        "setup",
+        "context",
+        "decision",
+        "action",
+        "score",
+        "ob_imbalance",
+        "ob_raw",
+        "ob_age_ms",
+        "funding_rate",
+        "oi_now",
+        "oi_change_pct",
+        "crowding",
+        "strategy_mode",
+        "strategy_score",
+        "news_bias",
+        "news_sentiment",
+        "news_impact",
+        "news_score",
+        "quantum_state",
+        "quantum_coherence",
+        "quantum_phase_bias",
+        "quantum_interference",
+        "quantum_tunneling",
+        "quantum_score",
+    ],
+}
+
+NUMERIC_FEATURES = {
+    "rr_estimated",
+    "score",
+    "ob_imbalance",
+    "ob_raw",
+    "ob_age_ms",
+    "funding_rate",
+    "oi_now",
+    "oi_change_pct",
+    "strategy_score",
+    "news_sentiment",
+    "news_impact",
+    "news_score",
+    "quantum_coherence",
+    "quantum_phase_bias",
+    "quantum_interference",
+    "quantum_tunneling",
+    "quantum_score",
+}
 LABEL_COLUMN = "label"
 
 
-def _safe_prepare_dataset(df: pd.DataFrame) -> pd.DataFrame:
+def _resolve_feature_columns(raw_df: pd.DataFrame, feature_set: str) -> list[str]:
+    requested = FEATURE_SET_DEFINITIONS.get(feature_set)
+    if requested is None:
+        raise ValueError(f"Unknown feature_set={feature_set}. Choose one of: {', '.join(FEATURE_SET_DEFINITIONS.keys())}")
+    return [c for c in requested if c in raw_df.columns]
+
+
+def _safe_prepare_dataset(df: pd.DataFrame, feature_columns: list[str]) -> pd.DataFrame:
     if df.empty:
         return df.copy()
 
     out = df.copy()
-    for col in FEATURE_COLUMNS + [LABEL_COLUMN]:
+    for col in feature_columns + [LABEL_COLUMN]:
         if col not in out.columns:
             out.loc[:, col] = pd.NA
 
@@ -41,10 +139,11 @@ def _safe_prepare_dataset(df: pd.DataFrame) -> pd.DataFrame:
     if out.empty:
         return out
 
-    out.loc[:, "rr_estimated"] = pd.to_numeric(out["rr_estimated"], errors="coerce")
-    out.loc[:, "setup"] = out["setup"].astype("string")
-    out.loc[:, "context"] = out["context"].astype("string")
-    out.loc[:, "decision"] = out["decision"].astype("string")
+    for col in feature_columns:
+        if col in NUMERIC_FEATURES:
+            out.loc[:, col] = pd.to_numeric(out[col], errors="coerce")
+        else:
+            out.loc[:, col] = out[col].astype("string")
     return out
 
 
@@ -52,13 +151,19 @@ def train_first_model(
     *,
     dataset_path: str = DEFAULT_DATASET_PATH,
     model_path: str = DEFAULT_MODEL_PATH,
+    feature_set: str = "base",
     random_state: int = 42,
 ) -> dict[str, Any]:
     if not os.path.exists(dataset_path):
         raise FileNotFoundError(f"Dataset not found: {dataset_path}")
 
     raw_df = pd.read_csv(dataset_path)
-    df = _safe_prepare_dataset(raw_df)
+    feature_set_key = str(feature_set).strip().lower()
+    selected_feature_columns = _resolve_feature_columns(raw_df, feature_set_key)
+    if not selected_feature_columns:
+        raise ValueError(f"No usable columns for feature_set={feature_set_key} in dataset.")
+
+    df = _safe_prepare_dataset(raw_df, selected_feature_columns)
     if df.empty:
         raise ValueError("Dataset is empty or has no valid labeled rows.")
 
@@ -68,16 +173,17 @@ def train_first_model(
         if ts.notna().any():
             df = df.assign(_ts_sort=ts).sort_values("_ts_sort").drop(columns=["_ts_sort"])
 
-    X = df[FEATURE_COLUMNS].copy()
+    X = df[selected_feature_columns].copy()
     y = df[LABEL_COLUMN].astype(int).copy()
     if y.nunique() < 2:
         raise ValueError("Training requires at least two label classes (0 and 1).")
 
-    numeric_features = ["rr_estimated"]
-    categorical_features = ["setup", "context", "decision"]
+    numeric_features = [c for c in selected_feature_columns if c in NUMERIC_FEATURES]
+    categorical_features = [c for c in selected_feature_columns if c not in NUMERIC_FEATURES]
+    transformers: list[tuple[str, Pipeline, list[str]]] = []
 
-    preprocessor = ColumnTransformer(
-        transformers=[
+    if numeric_features:
+        transformers.append(
             (
                 "num",
                 Pipeline(
@@ -86,7 +192,10 @@ def train_first_model(
                     ]
                 ),
                 numeric_features,
-            ),
+            )
+        )
+    if categorical_features:
+        transformers.append(
             (
                 "cat",
                 Pipeline(
@@ -96,9 +205,12 @@ def train_first_model(
                     ]
                 ),
                 categorical_features,
-            ),
-        ]
-    )
+            )
+        )
+    if not transformers:
+        raise ValueError("No features available to train the model.")
+
+    preprocessor = ColumnTransformer(transformers=transformers)
 
     model = LogisticRegression(
         max_iter=1000,
@@ -131,7 +243,8 @@ def train_first_model(
     artifact: dict[str, Any] = {
         "model_type": "logistic_regression",
         "pipeline": pipeline,
-        "feature_columns": FEATURE_COLUMNS,
+        "feature_set": feature_set_key,
+        "feature_columns": selected_feature_columns,
         "label_mapping": {"0": "negative", "1": "positive"},
         "trained_at_utc": datetime.now(timezone.utc).isoformat(),
         "rows_trained": int(len(df)),
@@ -151,6 +264,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train first supervised ML model.")
     parser.add_argument("--dataset-path", default=DEFAULT_DATASET_PATH)
     parser.add_argument("--model-path", default=DEFAULT_MODEL_PATH)
+    parser.add_argument("--feature-set", default="base", choices=list(FEATURE_SET_DEFINITIONS.keys()))
     parser.add_argument("--random-state", type=int, default=42)
     return parser.parse_args()
 
@@ -160,10 +274,12 @@ def main() -> None:
     artifact = train_first_model(
         dataset_path=str(args.dataset_path),
         model_path=str(args.model_path),
+        feature_set=str(args.feature_set),
         random_state=int(args.random_state),
     )
     print(
         f"[model_trainer] model_saved={args.model_path} "
+        f"feature_set={artifact.get('feature_set')} "
         f"rows={artifact['rows_trained']} "
         f"holdout_accuracy={artifact.get('holdout_accuracy')}"
     )
