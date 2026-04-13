@@ -390,16 +390,10 @@ class TradingEngine:
                 grade="C",
             )
 
-        breakdown = compute_score(
-            bias_h1=market.bias_h1,
-            bias_h4=market.bias_h4,
-            combined=market.combined_bias,
-            rr_est=features.rr_estimated,
-            volatility=market.volatility,
-            setup_name=features.setup.setup,
-            context=market.context,
-            decision=features.setup.decision,
-        )
+        funding = market.derivatives.get("funding_rate")
+        oi_now = market.derivatives.get("open_interest_now")
+        oi_change = market.derivatives.get("open_interest_change_pct_15m")
+        crowding = market.derivatives.get("crowding")
 
         ob_pts = 0
         if market.orderbook_imbalance is not None and market.orderbook_age_ms is not None and market.orderbook_age_ms <= 2000:
@@ -444,11 +438,54 @@ class TradingEngine:
             news_impact=float(market.news.impact_score),
         )
 
-        score = max(0, min(100, breakdown.score + ob_pts + conf_pts + deriv_pts + quant_pts + n_pts + strat_pts))
-        grade = "A" if score >= 80 else ("B" if score >= 70 else "C")
+        heuristic_extra_points = int(ob_pts + conf_pts + deriv_pts + quant_pts + n_pts + strat_pts)
+        action_hint = suggest_action(
+            market.context,
+            features.setup.setup,
+            features.explanation,
+            market.combined_bias,
+            squeeze_risk=market.squeeze_risk,
+        )
+        ml_features = {
+            "ob_imbalance": market.orderbook_imbalance,
+            "ob_raw": market.orderbook_raw,
+            "ob_age_ms": market.orderbook_age_ms,
+            "funding_rate": funding,
+            "oi_now": oi_now,
+            "oi_change_pct": oi_change,
+            "crowding": crowding,
+            "strategy_mode": market.strategy_profile.code,
+            "strategy_score": strat_pts,
+            "news_bias": market.news.bias,
+            "news_sentiment": market.news.sentiment_score,
+            "news_impact": market.news.impact_score,
+            "news_score": n_pts,
+            "action": action_hint,
+            "quantum_state": market.quantum.state,
+            "quantum_coherence": market.quantum.coherence,
+            "quantum_phase_bias": market.quantum.phase_bias,
+            "quantum_interference": market.quantum.interference,
+            "quantum_tunneling": market.quantum.tunneling_probability,
+            "quantum_score": quant_pts,
+        }
+        breakdown = compute_score(
+            bias_h1=market.bias_h1,
+            bias_h4=market.bias_h4,
+            combined=market.combined_bias,
+            rr_est=features.rr_estimated,
+            volatility=market.volatility,
+            setup_name=features.setup.setup,
+            context=market.context,
+            decision=features.setup.decision,
+            ml_features=ml_features,
+            extra_heuristic_points=heuristic_extra_points,
+        )
+
+        score = int(max(0, min(100, breakdown.score)))
+        grade = breakdown.grade
         self.logger.info("[Pipeline] step4 compute_all_scores score=%s grade=%s", score, grade)
         return ScoreState(
-            base_score=breakdown.score,
+            base_score=breakdown.heuristic_score,
             breakdown=breakdown,
             orderbook_points=ob_pts,
             confluence_points=conf_pts,

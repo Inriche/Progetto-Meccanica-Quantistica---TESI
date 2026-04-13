@@ -22,6 +22,7 @@ class ScoreBreakdown:
     score: int
     grade: str
     components: List[Tuple[str, int]]
+    heuristic_score: int = 0
 
 
 def _normalize_mode(value: Any) -> str:
@@ -114,6 +115,8 @@ def compute_score(
     setup_name: str,
     context: str = "transition",
     decision: str = "UNKNOWN",
+    ml_features: Optional[Dict[str, Any]] = None,
+    extra_heuristic_points: int = 0,
 ) -> ScoreBreakdown:
     score = 0
     comps: List[Tuple[str, int]] = []
@@ -173,16 +176,45 @@ def compute_score(
         score -= 5
         comps.append(("context_transition", -5))
 
-    heuristic_score = max(0, min(100, score))
+    if extra_heuristic_points != 0:
+        score += int(extra_heuristic_points)
+        comps.append(("contextual_adjustments", int(extra_heuristic_points)))
 
-    ml_probability = _predict_ml_probability(
-        {
-            "rr_estimated": rr_est,
-            "setup": setup_name,
-            "context": context,
-            "decision": decision,
-        }
-    )
+    heuristic_score = max(0, min(100, score))
+    # Keep this score available for "full" feature-sets without circular dependence.
+    ml_payload: Dict[str, Any] = {
+        "rr_estimated": rr_est,
+        "setup": setup_name,
+        "context": context,
+        "decision": decision,
+        "score": heuristic_score,
+        "action": None,
+        "ob_imbalance": None,
+        "ob_raw": None,
+        "ob_age_ms": None,
+        "funding_rate": None,
+        "oi_now": None,
+        "oi_change_pct": None,
+        "crowding": None,
+        "strategy_mode": None,
+        "strategy_score": None,
+        "news_bias": None,
+        "news_sentiment": None,
+        "news_impact": None,
+        "news_score": None,
+        "quantum_state": None,
+        "quantum_coherence": None,
+        "quantum_phase_bias": None,
+        "quantum_interference": None,
+        "quantum_tunneling": None,
+        "quantum_score": None,
+    }
+    if ml_features:
+        ml_payload.update(ml_features)
+        if ml_payload.get("score") is None:
+            ml_payload["score"] = heuristic_score
+
+    ml_probability = _predict_ml_probability(ml_payload)
 
     mode = _resolve_scoring_mode()
     if mode == "heuristic":
@@ -200,4 +232,9 @@ def compute_score(
 
     grade = "A" if score >= 80 else ("B" if score >= 70 else "C")
 
-    return ScoreBreakdown(score=score, grade=grade, components=comps)
+    return ScoreBreakdown(
+        score=score,
+        grade=grade,
+        components=comps,
+        heuristic_score=heuristic_score,
+    )

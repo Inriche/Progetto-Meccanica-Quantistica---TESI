@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import os
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 try:
@@ -132,7 +133,7 @@ def _safe_prepare_dataset(df: pd.DataFrame, feature_columns: list[str]) -> pd.Da
     out = df.copy()
     for col in feature_columns + [LABEL_COLUMN]:
         if col not in out.columns:
-            out.loc[:, col] = pd.NA
+            out.loc[:, col] = np.nan
 
     out.loc[:, LABEL_COLUMN] = pd.to_numeric(out[LABEL_COLUMN], errors="coerce")
     out = out[out[LABEL_COLUMN].isin([0, 1])].copy()
@@ -141,9 +142,13 @@ def _safe_prepare_dataset(df: pd.DataFrame, feature_columns: list[str]) -> pd.Da
 
     for col in feature_columns:
         if col in NUMERIC_FEATURES:
-            out.loc[:, col] = pd.to_numeric(out[col], errors="coerce")
+            numeric_col = pd.to_numeric(out[col], errors="coerce").astype("float64")
+            numeric_col = numeric_col.replace([np.inf, -np.inf], np.nan)
+            out.loc[:, col] = numeric_col
         else:
-            out.loc[:, col] = out[col].astype("string")
+            cat_col = out[col].astype("object")
+            cat_col = cat_col.where(pd.notna(cat_col), np.nan)
+            out.loc[:, col] = cat_col
     return out
 
 
@@ -180,6 +185,17 @@ def train_first_model(
 
     numeric_features = [c for c in selected_feature_columns if c in NUMERIC_FEATURES]
     categorical_features = [c for c in selected_feature_columns if c not in NUMERIC_FEATURES]
+    if numeric_features:
+        for col in numeric_features:
+            if col in X.columns:
+                col_numeric = pd.to_numeric(X[col], errors="coerce").astype("float64")
+                X.loc[:, col] = col_numeric.replace([np.inf, -np.inf], np.nan)
+    if categorical_features:
+        for col in categorical_features:
+            if col in X.columns:
+                col_cat = X[col].astype("object")
+                X.loc[:, col] = col_cat.where(pd.notna(col_cat), np.nan)
+
     transformers: list[tuple[str, Pipeline, list[str]]] = []
 
     if numeric_features:
@@ -188,7 +204,7 @@ def train_first_model(
                 "num",
                 Pipeline(
                     steps=[
-                        ("imputer", SimpleImputer(strategy="median")),
+                        ("imputer", SimpleImputer(missing_values=np.nan, strategy="median")),
                     ]
                 ),
                 numeric_features,
@@ -200,7 +216,7 @@ def train_first_model(
                 "cat",
                 Pipeline(
                     steps=[
-                        ("imputer", SimpleImputer(strategy="constant", fill_value="unknown")),
+                        ("imputer", SimpleImputer(missing_values=np.nan, strategy="constant", fill_value="unknown")),
                         ("onehot", OneHotEncoder(handle_unknown="ignore")),
                     ]
                 ),
