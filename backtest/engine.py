@@ -152,24 +152,49 @@ def load_historical_inputs(config: BacktestConfig) -> pd.DataFrame:
     if config.input_mode != "signals":
         where.append("score IS NOT NULL")
 
+    cols_df = pd.read_sql_query("PRAGMA table_info(signals)", conn)
+    available_cols = set(cols_df["name"].astype(str).tolist()) if not cols_df.empty else set()
+    preferred_cols = [
+        "id",
+        "signal_id",
+        "timestamp",
+        "symbol",
+        "decision",
+        "setup",
+        "context",
+        "action",
+        "score",
+        "rr_estimated",
+        "entry",
+        "sl",
+        "tp1",
+        "tp2",
+        "ob_imbalance",
+        "ob_raw",
+        "ob_age_ms",
+        "funding_rate",
+        "oi_now",
+        "oi_change_pct",
+        "crowding",
+        "strategy_mode",
+        "strategy_score",
+        "news_bias",
+        "news_sentiment",
+        "news_impact",
+        "news_score",
+        "quantum_state",
+        "quantum_coherence",
+        "quantum_phase_bias",
+        "quantum_interference",
+        "quantum_tunneling",
+        "quantum_score",
+        "snapshot_path",
+        "ticket_path",
+    ]
+    select_cols = [c for c in preferred_cols if c in available_cols]
     query = f"""
         SELECT
-            id,
-            signal_id,
-            timestamp,
-            symbol,
-            decision,
-            setup,
-            context,
-            action,
-            score,
-            rr_estimated,
-            entry,
-            sl,
-            tp1,
-            tp2,
-            snapshot_path,
-            ticket_path
+            {", ".join(select_cols)}
         FROM signals
         WHERE {" AND ".join(where)}
         ORDER BY timestamp ASC, id ASC

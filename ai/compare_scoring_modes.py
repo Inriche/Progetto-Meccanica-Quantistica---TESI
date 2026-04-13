@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 from typing import Any, Optional
 
+import numpy as np
 import pandas as pd
 
 from backtest.engine import BacktestConfig, load_historical_inputs, run_backtest
@@ -16,6 +18,28 @@ DEFAULT_OUTPUT_CSV = "out/scoring_modes_comparison.csv"
 DEFAULT_OUTPUT_JSON = "out/scoring_modes_comparison.json"
 
 MODES = ("heuristic", "hybrid", "ml")
+NUMERIC_FEATURES = {
+    "rr_estimated",
+    "score",
+    "ob_imbalance",
+    "ob_raw",
+    "ob_age_ms",
+    "funding_rate",
+    "oi_now",
+    "oi_change_pct",
+    "strategy_score",
+    "news_sentiment",
+    "news_impact",
+    "news_score",
+    "quantum_coherence",
+    "quantum_phase_bias",
+    "quantum_interference",
+    "quantum_tunneling",
+    "quantum_score",
+}
+
+
+LOGGER = logging.getLogger("ai.compare_scoring_modes")
 
 
 def _parse_timestamp(value: str) -> pd.Timestamp:
@@ -33,6 +57,7 @@ def _load_model_artifact(model_path: str) -> Optional[dict[str, Any]]:
 
         artifact = joblib.load(model_path)
         if isinstance(artifact, dict) and "pipeline" in artifact:
+            artifact.setdefault("__model_path", model_path)
             return artifact
     except Exception:
         return None
@@ -41,14 +66,33 @@ def _load_model_artifact(model_path: str) -> Optional[dict[str, Any]]:
 
 def _predict_positive_probability(df: pd.DataFrame, artifact: Optional[dict[str, Any]]) -> pd.Series:
     if artifact is None or df.empty:
-        return pd.Series([pd.NA] * len(df), index=df.index, dtype="object")
+        return pd.Series([np.nan] * len(df), index=df.index, dtype="float64")
 
+    model_path = str(artifact.get("__model_path", "unknown"))
     pipeline = artifact.get("pipeline")
     feature_columns = artifact.get("feature_columns", [])
     if pipeline is None or not feature_columns:
-        return pd.Series([pd.NA] * len(df), index=df.index, dtype="object")
+        LOGGER.warning(
+            "[compare_scoring_modes] ml_fallback: invalid artifact model_path=%s feature_columns=%s runtime_columns=%s",
+            model_path,
+            feature_columns,
+            list(df.columns),
+        )
+        return pd.Series([np.nan] * len(df), index=df.index, dtype="float64")
 
-    x = pd.DataFrame({col: df[col] if col in df.columns else pd.NA for col in feature_columns})
+    x = pd.DataFrame(index=df.index)
+    for col in feature_columns:
+        if col in df.columns:
+            x.loc[:, col] = df[col]
+        else:
+            x.loc[:, col] = np.nan
+        if col in NUMERIC_FEATURES:
+            col_numeric = pd.to_numeric(x[col], errors="coerce").astype("float64")
+            x.loc[:, col] = col_numeric.replace([np.inf, -np.inf], np.nan)
+        else:
+            col_cat = x[col].astype("object")
+            x.loc[:, col] = col_cat.where(pd.notna(col_cat), np.nan)
+
     try:
         proba = pipeline.predict_proba(x)
         classes = getattr(pipeline, "classes_", None)
@@ -56,22 +100,48 @@ def _predict_positive_probability(df: pd.DataFrame, artifact: Optional[dict[str,
             classifier = getattr(pipeline, "named_steps", {}).get("classifier")
             classes = getattr(classifier, "classes_", None)
         if classes is None:
-            return pd.Series([pd.NA] * len(df), index=df.index, dtype="object")
+            LOGGER.warning(
+                "[compare_scoring_modes] ml_fallback: missing classes model_path=%s feature_columns=%s runtime_columns=%s",
+                model_path,
+                feature_columns,
+                list(df.columns),
+            )
+            return pd.Series([np.nan] * len(df), index=df.index, dtype="float64")
         classes_list = list(classes)
         if 1 not in classes_list:
-            return pd.Series([pd.NA] * len(df), index=df.index, dtype="object")
+            LOGGER.warning(
+                "[compare_scoring_modes] ml_fallback: class 1 missing model_path=%s classes=%s feature_columns=%s runtime_columns=%s",
+                model_path,
+                classes_list,
+                feature_columns,
+                list(df.columns),
+            )
+            return pd.Series([np.nan] * len(df), index=df.index, dtype="float64")
         idx = classes_list.index(1)
         if proba is None or len(proba) != len(df):
-            return pd.Series([pd.NA] * len(df), index=df.index, dtype="object")
+            LOGGER.warning(
+                "[compare_scoring_modes] ml_fallback: invalid predict_proba output model_path=%s feature_columns=%s runtime_columns=%s",
+                model_path,
+                feature_columns,
+                list(df.columns),
+            )
+            return pd.Series([np.nan] * len(df), index=df.index, dtype="float64")
         out = []
         for row in proba:
             if idx >= len(row):
-                out.append(pd.NA)
+                out.append(np.nan)
             else:
                 out.append(float(row[idx]))
-        return pd.Series(out, index=df.index, dtype="object")
-    except Exception:
-        return pd.Series([pd.NA] * len(df), index=df.index, dtype="object")
+        return pd.Series(out, index=df.index, dtype="float64")
+    except Exception as ex:
+        LOGGER.warning(
+            "[compare_scoring_modes] ml_fallback: predict_proba exception model_path=%s error=%r feature_columns=%s runtime_columns=%s",
+            model_path,
+            ex,
+            feature_columns,
+            list(df.columns),
+        )
+        return pd.Series([np.nan] * len(df), index=df.index, dtype="float64")
 
 
 def _apply_mode_scores(
