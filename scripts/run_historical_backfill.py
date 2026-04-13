@@ -114,12 +114,45 @@ def _count_m15_rows(
     return int(row["n"]) if row is not None else 0
 
 
+def _orderbook_snapshot_stats(
+    db: DB,
+    symbol: str,
+    *,
+    start_ms: Optional[int] = None,
+    end_ms: Optional[int] = None,
+) -> dict[str, Any]:
+    where = ["UPPER(symbol) = UPPER(?)"]
+    params: list[Any] = [symbol]
+    if start_ms is not None:
+        where.append("(CAST(strftime('%s', timestamp) AS INTEGER) * 1000) >= ?")
+        params.append(int(start_ms))
+    if end_ms is not None:
+        where.append("(CAST(strftime('%s', timestamp) AS INTEGER) * 1000) <= ?")
+        params.append(int(end_ms))
+    query = f"""
+        SELECT COUNT(*) AS n, MIN(timestamp) AS min_ts, MAX(timestamp) AS max_ts
+        FROM orderbook_snapshots
+        WHERE {" AND ".join(where)}
+    """
+    row = db.conn.execute(query, tuple(params)).fetchone()
+    if row is None:
+        return {"n": 0, "min_ts": None, "max_ts": None}
+    return {
+        "n": int(row["n"] or 0),
+        "min_ts": row["min_ts"],
+        "max_ts": row["max_ts"],
+    }
+
+
 def _build_backfill_runtime_config_loader() -> Any:
     def _loader() -> Dict[str, Any]:
         cfg = load_runtime_config().copy()
         cfg["alerts_enabled"] = False
         cfg["news_enabled"] = False
         cfg["use_external_context"] = False
+        # Backfill runs without live orderbook/derivatives streams; persist neutral
+        # microstructure fallbacks to avoid mostly-empty training columns.
+        cfg["persist_neutral_microstructure"] = True
         return cfg
 
     return _loader
@@ -196,6 +229,30 @@ async def run_backfill(args: argparse.Namespace) -> None:
         args.end,
         args.warmup_hours,
         m15_total,
+    )
+    ob_stats = _orderbook_snapshot_stats(
+        db,
+        str(args.symbol).upper(),
+        start_ms=start_ms,
+        end_ms=end_ms,
+    )
+    if ob_stats["n"] <= 0:
+        logger.warning(
+            "No orderbook_snapshots in selected backfill window for symbol=%s. "
+            "Historical microstructure features are not reconstructible from candles alone.",
+            str(args.symbol).upper(),
+        )
+    else:
+        logger.info(
+            "Orderbook snapshot coverage in window symbol=%s rows=%s min_ts=%s max_ts=%s",
+            str(args.symbol).upper(),
+            ob_stats["n"],
+            ob_stats["min_ts"],
+            ob_stats["max_ts"],
+        )
+    logger.info(
+        "Derivatives historical context is not replayed in backfill. "
+        "Funding/OI fields will use neutral fallback persistence when enabled."
     )
 
     m15_iter = _iter_candles(

@@ -13,11 +13,43 @@ from validation import market_read
 
 
 DEFAULT_OUTPUT_CSV = "out/training_dataset.csv"
+MICRO_COLS = (
+    "ob_imbalance",
+    "ob_raw",
+    "ob_age_ms",
+    "funding_rate",
+    "oi_now",
+    "oi_change_pct",
+)
+MICRO_MIN_COVERAGE_WARN_PCT = 1.0
 
 
 def _configure_validation_db_path(db_path: str) -> None:
     market_read.DB_PATH = db_path
     outcome_simulator.DB_PATH = db_path
+
+
+def _log_microstructure_coverage(stage: str, df: pd.DataFrame) -> None:
+    if df.empty:
+        print(f"[dataset_builder] micro_coverage stage={stage} rows=0")
+        return
+    total = len(df)
+    parts = [f"rows={total}"]
+    for col in MICRO_COLS:
+        if col in df.columns:
+            nn = int(df[col].notna().sum())
+            pct = (100.0 * nn / total) if total > 0 else 0.0
+            parts.append(f"{col}_nn={nn} ({pct:.1f}%)")
+    print(f"[dataset_builder] micro_coverage stage={stage} " + " ".join(parts))
+    if stage == "raw_signals":
+        present_cols = [c for c in MICRO_COLS if c in df.columns]
+        if present_cols:
+            mean_cov = float(sum((100.0 * float(df[c].notna().sum()) / total) for c in present_cols) / len(present_cols))
+            if mean_cov < float(MICRO_MIN_COVERAGE_WARN_PCT):
+                print(
+                    "[dataset_builder][warning] historical microstructure coverage is very low. "
+                    "Feature-set microstructure/full may be weak unless signals are regenerated with supported sources."
+                )
 
 
 def _load_signal_feature_rows(db_path: str, limit: Optional[int] = None) -> pd.DataFrame:
@@ -169,6 +201,7 @@ def build_training_dataset(
     _configure_validation_db_path(db_path)
     raw_df = _load_signal_feature_rows(db_path=db_path, limit=limit)
     print(f"[dataset_builder] loaded_signals={len(raw_df)}")
+    _log_microstructure_coverage("raw_signals", raw_df)
 
     labeled_df = _label_rows(
         raw_df,
@@ -234,6 +267,7 @@ def build_training_dataset(
     unique_ordered_columns = list(dict.fromkeys(ordered_columns))
     existing_columns = [c for c in unique_ordered_columns if c in labeled_df.columns]
     dataset_df = labeled_df[existing_columns].copy()
+    _log_microstructure_coverage("final_dataset", dataset_df)
 
     os.makedirs(os.path.dirname(output_csv_path) or ".", exist_ok=True)
     dataset_df.to_csv(output_csv_path, index=False)

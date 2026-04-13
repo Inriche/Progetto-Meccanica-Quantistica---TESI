@@ -116,6 +116,14 @@ NUMERIC_FEATURES = {
     "quantum_tunneling",
     "quantum_score",
 }
+MICROSTRUCTURE_FEATURES = {
+    "ob_imbalance",
+    "ob_raw",
+    "ob_age_ms",
+    "funding_rate",
+    "oi_now",
+    "oi_change_pct",
+}
 LABEL_COLUMN = "label"
 
 
@@ -152,12 +160,40 @@ def _safe_prepare_dataset(df: pd.DataFrame, feature_columns: list[str]) -> pd.Da
     return out
 
 
+def _microstructure_support_stats(df: pd.DataFrame) -> dict[str, float]:
+    if df.empty:
+        return {"non_null_ratio": 0.0, "informative_ratio": 0.0}
+
+    cols = [c for c in MICROSTRUCTURE_FEATURES if c in df.columns]
+    if not cols:
+        return {"non_null_ratio": 0.0, "informative_ratio": 0.0}
+
+    n = float(len(df))
+    non_null_any = pd.Series(False, index=df.index)
+    informative_any = pd.Series(False, index=df.index)
+
+    for col in cols:
+        series = pd.to_numeric(df[col], errors="coerce")
+        non_null_any = non_null_any | series.notna()
+        if col == "ob_age_ms":
+            informative_any = informative_any | (series.notna() & (series < 9_000_000))
+        else:
+            informative_any = informative_any | (series.notna() & (series.abs() > 1e-12))
+
+    return {
+        "non_null_ratio": float(non_null_any.sum()) / n,
+        "informative_ratio": float(informative_any.sum()) / n,
+    }
+
+
 def train_first_model(
     *,
     dataset_path: str = DEFAULT_DATASET_PATH,
     model_path: str = DEFAULT_MODEL_PATH,
     feature_set: str = "base",
     random_state: int = 42,
+    min_micro_informative_ratio: float = 0.01,
+    allow_sparse_microstructure: bool = False,
 ) -> dict[str, Any]:
     if not os.path.exists(dataset_path):
         raise FileNotFoundError(f"Dataset not found: {dataset_path}")
@@ -171,6 +207,24 @@ def train_first_model(
     df = _safe_prepare_dataset(raw_df, selected_feature_columns)
     if df.empty:
         raise ValueError("Dataset is empty or has no valid labeled rows.")
+
+    support_stats: dict[str, float] | None = None
+    if any(c in MICROSTRUCTURE_FEATURES for c in selected_feature_columns):
+        support_stats = _microstructure_support_stats(df)
+        informative_ratio = float(support_stats["informative_ratio"])
+        non_null_ratio = float(support_stats["non_null_ratio"])
+        msg = (
+            f"Microstructure support is weak in dataset: "
+            f"non_null_ratio={non_null_ratio:.4f}, informative_ratio={informative_ratio:.4f}, "
+            f"feature_set={feature_set_key}"
+        )
+        if informative_ratio < float(min_micro_informative_ratio):
+            if allow_sparse_microstructure:
+                print(f"[model_trainer][warning] {msg} (training allowed by --allow-sparse-microstructure)")
+            else:
+                raise ValueError(
+                    f"{msg}. Training blocked: historical microstructure not sufficiently supported."
+                )
 
     # Prefer chronological ordering when timestamp is available.
     if "timestamp" in df.columns:
@@ -270,6 +324,7 @@ def train_first_model(
             "1": int((y == 1).sum()),
         },
         "holdout_accuracy": accuracy,
+        "microstructure_support": support_stats,
     }
 
     os.makedirs(os.path.dirname(model_path) or ".", exist_ok=True)
@@ -283,6 +338,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--model-path", default=DEFAULT_MODEL_PATH)
     parser.add_argument("--feature-set", default="base", choices=list(FEATURE_SET_DEFINITIONS.keys()))
     parser.add_argument("--random-state", type=int, default=42)
+    parser.add_argument("--min-micro-informative-ratio", type=float, default=0.01)
+    parser.add_argument("--allow-sparse-microstructure", action="store_true")
     return parser.parse_args()
 
 
@@ -293,6 +350,8 @@ def main() -> None:
         model_path=str(args.model_path),
         feature_set=str(args.feature_set),
         random_state=int(args.random_state),
+        min_micro_informative_ratio=float(args.min_micro_informative_ratio),
+        allow_sparse_microstructure=bool(args.allow_sparse_microstructure),
     )
     print(
         f"[model_trainer] model_saved={args.model_path} "

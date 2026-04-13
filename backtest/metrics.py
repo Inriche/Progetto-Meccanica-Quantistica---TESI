@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import logging
 import math
 from typing import Any, Dict, Optional
 
 import pandas as pd
+
+LOGGER = logging.getLogger("backtest.metrics")
 
 
 @dataclass(frozen=True)
@@ -33,6 +36,30 @@ def _safe_series(df: pd.DataFrame, column: str) -> pd.Series:
     return pd.to_numeric(df[column], errors="coerce").dropna()
 
 
+def _parse_equity_timestamps(timestamp_series: pd.Series) -> pd.Series:
+    parsed = pd.to_datetime(timestamp_series, utc=True, errors="coerce")
+    if parsed.notna().sum() >= 2 or len(timestamp_series) <= 1:
+        return parsed
+
+    # Fallback for mixed timestamp formats (ISO with timezone + naive datetime strings).
+    try:
+        parsed_mixed = pd.to_datetime(timestamp_series.astype(str), utc=True, errors="coerce", format="mixed")
+        if parsed_mixed.notna().sum() > parsed.notna().sum():
+            return parsed_mixed
+    except Exception:
+        pass
+
+    try:
+        parsed_rowwise = timestamp_series.astype(str).apply(
+            lambda value: pd.to_datetime(value, utc=True, errors="coerce")
+        )
+        if parsed_rowwise.notna().sum() > parsed.notna().sum():
+            return parsed_rowwise
+    except Exception:
+        pass
+    return parsed
+
+
 def _build_periodic_returns_from_equity(
     equity_curve_df: pd.DataFrame,
     *,
@@ -43,7 +70,7 @@ def _build_periodic_returns_from_equity(
 
     tmp = equity_curve_df.copy()
     tmp = tmp.assign(
-        timestamp=pd.to_datetime(tmp["timestamp"], utc=True, errors="coerce"),
+        timestamp=_parse_equity_timestamps(tmp["timestamp"]),
         equity=pd.to_numeric(tmp["equity"], errors="coerce"),
     )
     tmp = tmp.dropna(subset=["timestamp", "equity"]).copy()
@@ -111,10 +138,18 @@ def _compute_sortino(returns: pd.Series, annualization_factor: float = 1.0) -> f
 def _student_t_pdf(x: float, df: int) -> float:
     if df <= 0:
         return 0.0
-    num = math.gamma((df + 1.0) / 2.0)
-    den = math.sqrt(df * math.pi) * math.gamma(df / 2.0)
-    base = 1.0 + (x * x) / df
-    return (num / den) * (base ** (-(df + 1.0) / 2.0))
+    try:
+        log_num = math.lgamma((df + 1.0) / 2.0)
+        log_den = 0.5 * math.log(df * math.pi) + math.lgamma(df / 2.0)
+        base = 1.0 + (x * x) / df
+        if base <= 0:
+            return 0.0
+        log_pdf = (log_num - log_den) - (((df + 1.0) / 2.0) * math.log(base))
+        if not math.isfinite(log_pdf):
+            return 0.0
+        return float(math.exp(log_pdf))
+    except Exception:
+        return 0.0
 
 
 def _simpson_integral_t_pdf(a: float, b: float, df: int, steps: int = 2048) -> float:
@@ -154,10 +189,12 @@ def _one_sample_t_test_pvalue(returns: pd.Series) -> tuple[Optional[float], Opti
 
     mean = float(r.mean())
     std = float(r.std(ddof=1))
-    if std <= 0:
+    if not math.isfinite(std) or std <= 0:
         return None, None
 
     t_stat = mean / (std / math.sqrt(n))
+    if not math.isfinite(t_stat):
+        return None, None
     df = n - 1
     cdf_abs_t = _student_t_cdf(abs(t_stat), df)
     p_value = 2.0 * (1.0 - cdf_abs_t)
@@ -222,6 +259,12 @@ def compute_backtest_metrics(
         periodic_freq=periodic_freq,
     )
     _, p_value = _one_sample_t_test_pvalue(periodic_returns)
+    if p_value is None:
+        LOGGER.debug(
+            "p_value unavailable: periodic_obs=%s note=%s",
+            int(len(periodic_returns)),
+            periodic_note,
+        )
     buy_hold_return = _compute_buy_hold_return_from_prices(market_start_price, market_end_price)
     outperformance = None if buy_hold_return is None else float(total_return - float(buy_hold_return))
 

@@ -821,6 +821,28 @@ class TradingEngine:
         oi_now = market.derivatives.get("open_interest_now")
         oi_change = market.derivatives.get("open_interest_change_pct_15m")
         crowding = market.derivatives.get("crowding")
+        # Backfill has no historical depth/funding/OI replay; force neutral persistence
+        # to avoid sparse NULL-heavy microstructure columns in offline datasets.
+        persist_neutral_micro = bool(
+            market.runtime_cfg.get("persist_neutral_microstructure", False)
+            or str(trigger).upper() == "BACKFILL"
+        )
+
+        ob_imbalance_persist = market.orderbook_imbalance
+        ob_raw_persist = market.orderbook_raw
+        ob_age_ms_persist = market.orderbook_age_ms
+        funding_persist = funding
+        oi_now_persist = oi_now
+        oi_change_persist = oi_change
+        crowding_persist = crowding
+        if persist_neutral_micro:
+            ob_imbalance_persist = 0.0 if ob_imbalance_persist is None else float(ob_imbalance_persist)
+            ob_raw_persist = 0.0 if ob_raw_persist is None else float(ob_raw_persist)
+            ob_age_ms_persist = 9_999_999 if ob_age_ms_persist is None else int(ob_age_ms_persist)
+            funding_persist = 0.0 if funding_persist is None else float(funding_persist)
+            oi_now_persist = 0.0 if oi_now_persist is None else float(oi_now_persist)
+            oi_change_persist = 0.0 if oi_change_persist is None else float(oi_change_persist)
+            crowding_persist = "neutral" if crowding_persist is None else str(crowding_persist)
 
         if draft.setup_name == "NONE":
             self._save_status_event(
@@ -837,13 +859,13 @@ class TradingEngine:
                 tp2=draft.tp2,
                 rr_estimated=draft.rr_estimated,
                 score=draft.score,
-                ob_imbalance=market.orderbook_imbalance,
-                ob_raw=market.orderbook_raw,
-                ob_age_ms=market.orderbook_age_ms,
-                funding_rate=funding,
-                oi_now=oi_now,
-                oi_change_pct=oi_change,
-                crowding=crowding,
+                ob_imbalance=ob_imbalance_persist,
+                ob_raw=ob_raw_persist,
+                ob_age_ms=ob_age_ms_persist,
+                funding_rate=funding_persist,
+                oi_now=oi_now_persist,
+                oi_change_pct=oi_change_persist,
+                crowding=crowding_persist,
                 strategy_mode=market.strategy_profile.code,
                 strategy_score=scores.strategy_points,
                 news_bias=market.news.bias,
@@ -881,15 +903,15 @@ class TradingEngine:
             "action": draft.action,
             "squeeze_risk": market.squeeze_risk,
             "orderbook": {
-                "imbalance_avg": market.orderbook_imbalance,
-                "raw": market.orderbook_raw,
-                "age_ms": market.orderbook_age_ms,
+                "imbalance_avg": ob_imbalance_persist,
+                "raw": ob_raw_persist,
+                "age_ms": ob_age_ms_persist,
             },
             "derivatives": {
-                "funding_rate": funding,
-                "oi_now": oi_now,
-                "oi_change_pct_15m": oi_change,
-                "crowding": crowding,
+                "funding_rate": funding_persist,
+                "oi_now": oi_now_persist,
+                "oi_change_pct_15m": oi_change_persist,
+                "crowding": crowding_persist,
             },
             "strategy": {
                 "mode": market.strategy_profile.code,
@@ -976,13 +998,13 @@ class TradingEngine:
                 "tp2": draft.tp2,
                 "rr_estimated": draft.rr_estimated,
                 "score": draft.score,
-                "ob_imbalance": market.orderbook_imbalance,
-                "ob_raw": market.orderbook_raw,
-                "ob_age_ms": market.orderbook_age_ms,
-                "funding_rate": funding,
-                "oi_now": oi_now,
-                "oi_change_pct": oi_change,
-                "crowding": crowding,
+                "ob_imbalance": ob_imbalance_persist,
+                "ob_raw": ob_raw_persist,
+                "ob_age_ms": ob_age_ms_persist,
+                "funding_rate": funding_persist,
+                "oi_now": oi_now_persist,
+                "oi_change_pct": oi_change_persist,
+                "crowding": crowding_persist,
                 "strategy_mode": market.strategy_profile.code,
                 "strategy_score": scores.strategy_points,
                 "news_bias": market.news.bias,
