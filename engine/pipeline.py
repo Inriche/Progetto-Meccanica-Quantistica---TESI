@@ -11,7 +11,7 @@ from execution.outcome_simulator import (
     load_future_candles_after_timestamp,
     simulate_outcome_from_candles,
 )
-from features.indicators import rr
+from features.indicators import atr, rr
 from features.market_state import volatility_regime
 from features.quantum_state import build_quantum_state
 from liquidity.liquidation_engine import fetch_liquidation_map
@@ -483,6 +483,12 @@ class TradingEngine:
                 market.combined_bias,
                 squeeze_risk=market.squeeze_risk,
             )
+            if str(action).startswith("WAIT_BREAKOUT"):
+                self._log_wait_breakout_debug(
+                    market=market,
+                    action=action,
+                    decision="FLAT",
+                )
             reasons = [
                 setup_why,
                 f"squeeze_risk={market.squeeze_risk}",
@@ -595,6 +601,77 @@ class TradingEngine:
             action=action,
             risk_after=market.risk_before,
             event_type="signal",
+        )
+
+    def _log_wait_breakout_debug(
+        self,
+        *,
+        market: MarketState,
+        action: str,
+        decision: str,
+    ) -> None:
+        df_m15 = market.df_m15
+        if len(df_m15) < 20:
+            self.logger.info(
+                "[WAIT_BREAKOUT_DEBUG] ts=%s action=%s decision=%s price=%s note=insufficient_m15_history",
+                market.now.isoformat(),
+                action,
+                decision,
+                market.latest_price,
+            )
+            return
+
+        last = df_m15.iloc[-1]
+        prev = df_m15.iloc[-2]
+        range_high = float(df_m15["high"].iloc[-12:-1].max())
+        range_low = float(df_m15["low"].iloc[-12:-1].min())
+        candle_range = float(last["high"] - last["low"])
+        atr14 = atr(df_m15, 14).iloc[-1]
+        atr14_value = float(atr14) if pd.notna(atr14) else None
+        atr_ok = bool(pd.notna(atr14) and candle_range <= float(atr14) * 1.8)
+
+        broke_up = bool(last["close"] > range_high)
+        broke_down = bool(last["close"] < range_low)
+        strong_close_up = bool(last["close"] > last["open"])
+        strong_close_down = bool(last["close"] < last["open"])
+        prev_not_broken_up = bool(prev["close"] <= range_high)
+        prev_not_broken_down = bool(prev["close"] >= range_low)
+
+        price = float(market.latest_price) if market.latest_price is not None else None
+        long_distance_abs = (price - range_high) if price is not None else None
+        short_distance_abs = (price - range_low) if price is not None else None
+        long_distance_pct = ((price / range_high) - 1.0) if (price is not None and range_high > 0) else None
+        short_distance_pct = ((price / range_low) - 1.0) if (price is not None and range_low > 0) else None
+        atr_ratio = (candle_range / atr14_value) if (atr14_value is not None and atr14_value > 0) else None
+
+        self.logger.info(
+            "[WAIT_BREAKOUT_DEBUG] ts=%s price=%.6f breakout_long=%.6f breakout_short=%.6f "
+            "dist_long=%.6f dist_long_pct=%.6f dist_short=%.6f dist_short_pct=%.6f "
+            "vol_atr14=%.6f candle_range=%.6f range_atr_ratio=%.6f atr_ok=%s "
+            "bias=%s broke_up=%s strong_up=%s prev_ok_up=%s broke_down=%s strong_down=%s prev_ok_down=%s "
+            "quantum_coherence=%.6f decision=%s action=%s",
+            market.now.isoformat(),
+            price if price is not None else float("nan"),
+            range_high,
+            range_low,
+            long_distance_abs if long_distance_abs is not None else float("nan"),
+            long_distance_pct if long_distance_pct is not None else float("nan"),
+            short_distance_abs if short_distance_abs is not None else float("nan"),
+            short_distance_pct if short_distance_pct is not None else float("nan"),
+            atr14_value if atr14_value is not None else float("nan"),
+            candle_range,
+            atr_ratio if atr_ratio is not None else float("nan"),
+            atr_ok,
+            market.combined_bias,
+            broke_up,
+            strong_close_up,
+            prev_not_broken_up,
+            broke_down,
+            strong_close_down,
+            prev_not_broken_down,
+            float(market.quantum.coherence),
+            decision,
+            action,
         )
 
     def apply_risk_filter(
