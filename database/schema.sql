@@ -47,6 +47,10 @@ CREATE TABLE IF NOT EXISTS signals (
     quantum_phase_bias REAL,
     quantum_interference REAL,
     quantum_tunneling REAL,
+    quantum_energy REAL,
+    quantum_decoherence_rate REAL,
+    quantum_transition_rate REAL,
+    quantum_dominant_mode TEXT,
     quantum_score INTEGER,
     snapshot_path TEXT,
     ticket_path TEXT

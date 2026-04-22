@@ -289,6 +289,10 @@ async def main():
         quantum_phase_bias=None,
         quantum_interference=None,
         quantum_tunneling=None,
+        quantum_energy=None,
+        quantum_decoherence_rate=None,
+        quantum_transition_rate=None,
+        quantum_dominant_mode=None,
         quantum_score=None,
         ticket_path=None,
         snapshot_path=None,
@@ -344,6 +348,10 @@ async def main():
                 "quantum_phase_bias": quantum_phase_bias,
                 "quantum_interference": quantum_interference,
                 "quantum_tunneling": quantum_tunneling,
+                "quantum_energy": quantum_energy,
+                "quantum_decoherence_rate": quantum_decoherence_rate,
+                "quantum_transition_rate": quantum_transition_rate,
+                "quantum_dominant_mode": quantum_dominant_mode,
                 "quantum_score": quantum_score,
                 "snapshot_path": snapshot_path,
                 "ticket_path": ticket_path,
@@ -560,7 +568,7 @@ async def main():
             b_h4 = detect_bias_h4(df_h4) if len(df_h4) > 50 else "neutral"
             b_comb = combined_bias(b_h1, b_h4)
             ctx = classify_market_context(df_m15, df_h1, df_h4)
-            quantum = build_quantum_state(df_m15, df_h1, df_h4)
+            quantum = build_quantum_state(df_m15, df_h1, df_h4, runtime_cfg=runtime_cfg)
 
             last_close = float(df_m15["close"].iloc[-1])
 
@@ -615,7 +623,9 @@ async def main():
                 f"setup={setup_info} | strategy={strategy_profile.code} | action={action} | squeeze_risk={squeeze_risk} | "
                 f"news_bias={news.bias} news_sentiment={news.sentiment_score} news_impact={news.impact_score} | "
                 f"quantum_state={quantum.state} quantum_coherence={quantum.coherence} "
-                f"quantum_phase={quantum.phase_bias} quantum_tunneling={quantum.tunneling_probability} | "
+                f"quantum_phase={quantum.phase_bias} quantum_tunneling={quantum.tunneling_probability} "
+                f"quantum_energy={quantum.energy} quantum_decoherence_rate={quantum.decoherence_rate} "
+                f"quantum_transition_rate={quantum.transition_rate} dominant_mode={quantum.dominant_mode} | "
                 f"risk_can_emit={risk_status['can_emit']} "
                 f"risk_reason={risk_status['block_reason']} "
                 f"signals_today={risk_status['signals_today']}/{risk_status['max_signals_per_day']} "
@@ -687,6 +697,8 @@ async def main():
                     f"news_impact={r.get('news_impact')} news_score={r.get('news_score')} | "
                     f"quantum_state={r.get('quantum_state')} coherence={r.get('quantum_coherence')} "
                     f"phase={r.get('quantum_phase_bias')} tunneling={r.get('quantum_tunneling')} "
+                    f"energy={r.get('quantum_energy')} decoherence={r.get('quantum_decoherence_rate')} "
+                    f"transition={r.get('quantum_transition_rate')} dominant_mode={r.get('quantum_dominant_mode')} "
                     f"quant_score={r.get('quantum_score')}"
                 )
                 print(f"why={r['why']}")
@@ -709,7 +721,7 @@ async def main():
             b_h4 = detect_bias_h4(df_h4) if len(df_h4) > 50 else "neutral"
             b_comb = combined_bias(b_h1, b_h4)
             ctx = classify_market_context(df_m15, df_h1, df_h4)
-            quantum = build_quantum_state(df_m15, df_h1, df_h4)
+            quantum = build_quantum_state(df_m15, df_h1, df_h4, runtime_cfg=runtime_cfg)
             news = build_news_context(
                 symbol=CONFIG.symbol,
                 limit=int(runtime_cfg.get("news_headline_limit", 6)),
@@ -766,7 +778,11 @@ async def main():
                     f"quantum_state={quantum.state}; "
                     f"quantum_coherence={quantum.coherence:.2f}; "
                     f"quantum_phase_bias={quantum.phase_bias:.2f}; "
-                    f"quantum_tunneling={quantum.tunneling_probability:.2f}"
+                    f"quantum_tunneling={quantum.tunneling_probability:.2f}; "
+                    f"quantum_energy={quantum.energy:.2f}; "
+                    f"quantum_decoherence_rate={quantum.decoherence_rate:.2f}; "
+                    f"quantum_transition_rate={quantum.transition_rate:.2f}; "
+                    f"quantum_dominant_mode={quantum.dominant_mode}"
                 ),
                 ob_avg=imb,
                 ob_raw=raw_imb,
@@ -774,6 +790,10 @@ async def main():
                 quantum_coherence=quantum.coherence,
                 quantum_phase_bias=quantum.phase_bias,
                 quantum_tunneling=quantum.tunneling_probability,
+                quantum_energy=quantum.energy,
+                quantum_decoherence_rate=quantum.decoherence_rate,
+                quantum_transition_rate=quantum.transition_rate,
+                quantum_dominant_mode=quantum.dominant_mode,
             )
 
             print("=" * 90)

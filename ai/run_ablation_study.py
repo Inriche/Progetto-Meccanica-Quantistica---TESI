@@ -18,6 +18,8 @@ DEFAULT_FEATURE_SETS = [
     "base_microstructure",
     "full",
 ]
+# Feature-set definitions are sourced from model_trainer, so new quantum-inspired
+# columns flow through here without duplicating the schema.
 DEFAULT_OUTPUT_CSV = "out/ablation_study_results.csv"
 DEFAULT_OUTPUT_JSON = "out/ablation_study_results.json"
 DEFAULT_MODELS_DIR = "out/models"

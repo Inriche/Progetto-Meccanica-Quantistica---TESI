@@ -207,6 +207,10 @@ def compute_score(
         "quantum_phase_bias": None,
         "quantum_interference": None,
         "quantum_tunneling": None,
+        "quantum_energy": None,
+        "quantum_decoherence_rate": None,
+        "quantum_transition_rate": None,
+        "quantum_dominant_mode": None,
         "quantum_score": None,
     }
     if ml_features:

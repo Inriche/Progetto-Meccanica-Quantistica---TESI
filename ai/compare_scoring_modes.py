@@ -35,6 +35,9 @@ NUMERIC_FEATURES = {
     "quantum_phase_bias",
     "quantum_interference",
     "quantum_tunneling",
+    "quantum_energy",
+    "quantum_decoherence_rate",
+    "quantum_transition_rate",
     "quantum_score",
 }
 

@@ -41,6 +41,10 @@ FEATURE_SET_DEFINITIONS: dict[str, list[str]] = {
         "quantum_phase_bias",
         "quantum_interference",
         "quantum_tunneling",
+        "quantum_energy",
+        "quantum_decoherence_rate",
+        "quantum_transition_rate",
+        "quantum_dominant_mode",
         "quantum_score",
     ],
     "base_microstructure": [
@@ -93,6 +97,10 @@ FEATURE_SET_DEFINITIONS: dict[str, list[str]] = {
         "quantum_phase_bias",
         "quantum_interference",
         "quantum_tunneling",
+        "quantum_energy",
+        "quantum_decoherence_rate",
+        "quantum_transition_rate",
+        "quantum_dominant_mode",
         "quantum_score",
     ],
 }
@@ -114,6 +122,9 @@ NUMERIC_FEATURES = {
     "quantum_phase_bias",
     "quantum_interference",
     "quantum_tunneling",
+    "quantum_energy",
+    "quantum_decoherence_rate",
+    "quantum_transition_rate",
     "quantum_score",
 }
 MICROSTRUCTURE_FEATURES = {

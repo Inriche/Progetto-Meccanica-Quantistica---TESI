@@ -73,6 +73,10 @@ class DB:
             ("quantum_phase_bias", "REAL"),
             ("quantum_interference", "REAL"),
             ("quantum_tunneling", "REAL"),
+            ("quantum_energy", "REAL"),
+            ("quantum_decoherence_rate", "REAL"),
+            ("quantum_transition_rate", "REAL"),
+            ("quantum_dominant_mode", "TEXT"),
             ("quantum_score", "INTEGER"),
             ("snapshot_path", "TEXT"),
             ("ticket_path", "TEXT"),
@@ -198,9 +202,10 @@ class DB:
              ob_imbalance, ob_raw, ob_age_ms,
              funding_rate, oi_now, oi_change_pct, crowding,
              strategy_mode, strategy_score, news_bias, news_sentiment, news_impact, news_score,
-             quantum_state, quantum_coherence, quantum_phase_bias, quantum_interference, quantum_tunneling, quantum_score,
+             quantum_state, quantum_coherence, quantum_phase_bias, quantum_interference, quantum_tunneling,
+             quantum_energy, quantum_decoherence_rate, quantum_transition_rate, quantum_dominant_mode, quantum_score,
              snapshot_path, ticket_path)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 row["signal_id"],
@@ -236,6 +241,10 @@ class DB:
                 row.get("quantum_phase_bias"),
                 row.get("quantum_interference"),
                 row.get("quantum_tunneling"),
+                row.get("quantum_energy"),
+                row.get("quantum_decoherence_rate"),
+                row.get("quantum_transition_rate"),
+                row.get("quantum_dominant_mode"),
                 row.get("quantum_score"),
                 row.get("snapshot_path"),
                 row.get("ticket_path"),
@@ -251,7 +260,8 @@ class DB:
                    ob_imbalance, ob_raw, ob_age_ms,
                    funding_rate, oi_now, oi_change_pct, crowding,
                    strategy_mode, strategy_score, news_bias, news_sentiment, news_impact, news_score,
-                   quantum_state, quantum_coherence, quantum_phase_bias, quantum_interference, quantum_tunneling, quantum_score,
+                   quantum_state, quantum_coherence, quantum_phase_bias, quantum_interference, quantum_tunneling,
+                   quantum_energy, quantum_decoherence_rate, quantum_transition_rate, quantum_dominant_mode, quantum_score,
                    ticket_path
             FROM signals
             ORDER BY id DESC

@@ -56,54 +56,68 @@ def _load_signal_feature_rows(db_path: str, limit: Optional[int] = None) -> pd.D
     if not os.path.exists(db_path):
         return pd.DataFrame()
 
-    query = """
-        SELECT
-            s.signal_id,
-            s.timestamp,
-            s.symbol,
-            NULL AS trigger,
-            s.decision,
-            s.setup,
-            s.context,
-            s.action,
-            s.score,
-            s.rr_estimated,
-            s.entry,
-            s.sl,
-            s.tp1,
-            s.tp2,
-            s.ob_imbalance,
-            s.ob_raw,
-            s.ob_age_ms,
-            s.funding_rate,
-            s.oi_now,
-            s.oi_change_pct,
-            s.crowding,
-            s.strategy_mode,
-            s.strategy_score,
-            s.news_bias,
-            s.news_sentiment,
-            s.news_impact,
-            s.news_score,
-            s.quantum_state,
-            s.quantum_coherence,
-            s.quantum_phase_bias,
-            s.quantum_interference,
-            s.quantum_tunneling,
-            s.quantum_score,
-            s.ticket_path
-        FROM signals s
-        WHERE s.event_type = 'signal'
-        ORDER BY s.id ASC
-    """
+    desired_cols = [
+        "signal_id",
+        "timestamp",
+        "symbol",
+        "decision",
+        "setup",
+        "context",
+        "action",
+        "score",
+        "rr_estimated",
+        "entry",
+        "sl",
+        "tp1",
+        "tp2",
+        "ob_imbalance",
+        "ob_raw",
+        "ob_age_ms",
+        "funding_rate",
+        "oi_now",
+        "oi_change_pct",
+        "crowding",
+        "strategy_mode",
+        "strategy_score",
+        "news_bias",
+        "news_sentiment",
+        "news_impact",
+        "news_score",
+        "quantum_state",
+        "quantum_coherence",
+        "quantum_phase_bias",
+        "quantum_interference",
+        "quantum_tunneling",
+        "quantum_energy",
+        "quantum_decoherence_rate",
+        "quantum_transition_rate",
+        "quantum_dominant_mode",
+        "quantum_score",
+        "ticket_path",
+    ]
 
     params: tuple[Any, ...] = ()
-    if limit is not None and limit > 0:
-        query += " LIMIT ?"
-        params = (int(limit),)
-
     conn = sqlite3.connect(db_path)
     try:
+        cols_df = pd.read_sql_query("PRAGMA table_info(signals)", conn)
+        available = set(cols_df["name"].astype(str).tolist()) if not cols_df.empty else set()
+        select_parts = []
+        for col in desired_cols:
+            if col in available:
+                select_parts.append(f"s.{col}")
+            else:
+                select_parts.append(f"NULL AS {col}")
+        query = f"""
+            SELECT
+                {", ".join(select_parts)},
+                NULL AS trigger
+            FROM signals s
+            WHERE s.event_type = 'signal'
+            ORDER BY s.id ASC
+        """
+        if limit is not None and limit > 0:
+            query += " LIMIT ?"
+            params = (int(limit),)
         df = pd.read_sql_query(query, conn, params=params)
     finally:
         conn.close()
@@ -256,6 +270,10 @@ def build_training_dataset(
         "quantum_phase_bias",
         "quantum_interference",
         "quantum_tunneling",
+        "quantum_energy",
+        "quantum_decoherence_rate",
+        "quantum_transition_rate",
+        "quantum_dominant_mode",
         "quantum_score",
         "signal_id",
         "ticket_path",

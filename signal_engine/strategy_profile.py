@@ -93,6 +93,10 @@ def strategy_points(
     quantum_phase_bias: float,
     news_sentiment: float,
     news_impact: float,
+    quantum_energy: float | None = None,
+    quantum_decoherence_rate: float | None = None,
+    quantum_transition_rate: float | None = None,
+    quantum_dominant_mode: str | None = None,
 ) -> tuple[int, list[str]]:
     pts = 0.0
     reasons: list[str] = []
@@ -143,6 +147,28 @@ def strategy_points(
             pts += 4.0 * profile.quantum_weight
         elif abs(quantum_phase_bias) < 0.08:
             pts -= 3.0
+
+        if quantum_energy is not None and quantum_energy <= 0.45:
+            pts += 2.5 * profile.quantum_weight
+            reasons.append("low effective energy supports ordered structure")
+        if quantum_decoherence_rate is not None and quantum_decoherence_rate >= 0.55:
+            pts -= 3.0 * profile.quantum_weight
+            reasons.append("decoherence is elevated")
+        elif quantum_decoherence_rate is not None and quantum_decoherence_rate <= 0.30:
+            pts += 2.0 * profile.quantum_weight
+            reasons.append("coherent cross-timeframe alignment")
+
+        if quantum_transition_rate is not None and quantum_transition_rate >= 0.55:
+            if quantum_tunneling >= 0.68:
+                pts += 2.0 * profile.quantum_weight
+                reasons.append("transition state is controlled rather than noisy")
+            else:
+                pts -= 1.0 * profile.quantum_weight
+
+        if quantum_dominant_mode == "h4" and abs(quantum_phase_bias) >= 0.18:
+            pts += 1.5 * profile.quantum_weight
+        elif quantum_dominant_mode == "m15" and abs(quantum_phase_bias) < 0.10:
+            pts += 0.5 * profile.quantum_weight
 
     if squeeze_risk == "SQUEEZE RISK HIGH" and profile.code != "LIQUIDITY_HUNTER":
         pts -= 3.0

@@ -290,7 +290,12 @@ class TradingEngine:
         volatility = volatility_regime(df_m15) if len(df_m15) > 0 else "low"
         context = classify_market_context(df_m15, df_h1, df_h4) if len(df_m15) > 0 else "transition"
         # Structural persistence may require longer history than short-term bias features.
-        quantum = build_quantum_state(quantum_df_m15, quantum_df_h1, quantum_df_h4)
+        quantum = build_quantum_state(
+            quantum_df_m15,
+            quantum_df_h1,
+            quantum_df_h4,
+            runtime_cfg=runtime_cfg,
+        )
 
         use_external_context = bool(runtime_cfg.get("use_external_context", True))
         liquidation_cluster = None
@@ -417,6 +422,11 @@ class TradingEngine:
             decision=features.setup.decision,
             coherence_threshold=float(market.runtime_cfg["quantum_coherence_threshold"]),
             tunneling_threshold=float(market.runtime_cfg["quantum_tunneling_threshold"]),
+            energy_threshold=float(market.runtime_cfg.get("quantum_energy_threshold", 0.45)),
+            decoherence_penalty=float(market.runtime_cfg.get("quantum_decoherence_penalty", 4.0)),
+            transition_threshold=float(market.runtime_cfg.get("quantum_transition_threshold", 0.55)),
+            phase_sensitivity=float(market.runtime_cfg.get("quantum_phase_sensitivity", 1.0)),
+            coupling_strength=float(market.runtime_cfg.get("quantum_coupling_strength", 0.65)),
         )
         n_pts = news_points(
             news=market.news,
@@ -436,6 +446,10 @@ class TradingEngine:
             quantum_phase_bias=float(market.quantum.phase_bias),
             news_sentiment=float(market.news.sentiment_score),
             news_impact=float(market.news.impact_score),
+            quantum_energy=float(market.quantum.energy),
+            quantum_decoherence_rate=float(market.quantum.decoherence_rate),
+            quantum_transition_rate=float(market.quantum.transition_rate),
+            quantum_dominant_mode=str(market.quantum.dominant_mode),
         )
 
         heuristic_extra_points = int(ob_pts + conf_pts + deriv_pts + quant_pts + n_pts + strat_pts)
@@ -466,6 +480,10 @@ class TradingEngine:
             "quantum_phase_bias": market.quantum.phase_bias,
             "quantum_interference": market.quantum.interference,
             "quantum_tunneling": market.quantum.tunneling_probability,
+            "quantum_energy": market.quantum.energy,
+            "quantum_decoherence_rate": market.quantum.decoherence_rate,
+            "quantum_transition_rate": market.quantum.transition_rate,
+            "quantum_dominant_mode": market.quantum.dominant_mode,
             "quantum_score": quant_pts,
         }
         breakdown = compute_score(
@@ -537,6 +555,10 @@ class TradingEngine:
                 f"quantum_coherence={market.quantum.coherence:.2f}",
                 f"quantum_phase_bias={market.quantum.phase_bias:.2f}",
                 f"quantum_tunneling={market.quantum.tunneling_probability:.2f}",
+                f"quantum_energy={market.quantum.energy:.2f}",
+                f"quantum_decoherence_rate={market.quantum.decoherence_rate:.2f}",
+                f"quantum_transition_rate={market.quantum.transition_rate:.2f}",
+                f"quantum_dominant_mode={market.quantum.dominant_mode}",
                 f"trigger={trigger}",
             ]
             self.logger.info("[Pipeline] step5 generate_signal_ticket setup=NONE action=%s", action)
@@ -575,6 +597,10 @@ class TradingEngine:
             f"phase_bias={market.quantum.phase_bias:.2f} "
             f"interference={market.quantum.interference:.2f} "
             f"tunneling={market.quantum.tunneling_probability:.2f} "
+            f"energy={market.quantum.energy:.2f} "
+            f"decoherence={market.quantum.decoherence_rate:.2f} "
+            f"transition={market.quantum.transition_rate:.2f} "
+            f"dominant_mode={market.quantum.dominant_mode} "
             f"points={scores.quantum_points}"
         )
         reasons.append(f"context={market.context}")
@@ -877,6 +903,10 @@ class TradingEngine:
                 quantum_phase_bias=market.quantum.phase_bias,
                 quantum_interference=market.quantum.interference,
                 quantum_tunneling=market.quantum.tunneling_probability,
+                quantum_energy=market.quantum.energy,
+                quantum_decoherence_rate=market.quantum.decoherence_rate,
+                quantum_transition_rate=market.quantum.transition_rate,
+                quantum_dominant_mode=market.quantum.dominant_mode,
                 quantum_score=scores.quantum_points,
                 ticket_path=None,
                 snapshot_path=None,
@@ -929,6 +959,10 @@ class TradingEngine:
                 "tunneling_probability": market.quantum.tunneling_probability,
                 "amplitude": market.quantum.amplitude,
                 "state_confidence": market.quantum.state_confidence,
+                "energy": market.quantum.energy,
+                "decoherence_rate": market.quantum.decoherence_rate,
+                "transition_rate": market.quantum.transition_rate,
+                "dominant_mode": market.quantum.dominant_mode,
                 "points": scores.quantum_points,
             },
             "liquidity": {
@@ -1016,6 +1050,10 @@ class TradingEngine:
                 "quantum_phase_bias": market.quantum.phase_bias,
                 "quantum_interference": market.quantum.interference,
                 "quantum_tunneling": market.quantum.tunneling_probability,
+                "quantum_energy": market.quantum.energy,
+                "quantum_decoherence_rate": market.quantum.decoherence_rate,
+                "quantum_transition_rate": market.quantum.transition_rate,
+                "quantum_dominant_mode": market.quantum.dominant_mode,
                 "quantum_score": scores.quantum_points,
                 "snapshot_path": snapshot_path,
                 "ticket_path": ticket_path,
@@ -1210,6 +1248,10 @@ class TradingEngine:
             "quantum_state": market.quantum.state,
             "quantum_coherence": market.quantum.coherence,
             "quantum_score": scores.quantum_points,
+            "quantum_energy": market.quantum.energy,
+            "quantum_decoherence_rate": market.quantum.decoherence_rate,
+            "quantum_transition_rate": market.quantum.transition_rate,
+            "quantum_dominant_mode": market.quantum.dominant_mode,
             "context": market.context,
             "squeeze_risk": market.squeeze_risk,
             "risk_can_emit": draft.risk_after.get("can_emit"),

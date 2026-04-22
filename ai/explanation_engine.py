@@ -14,6 +14,10 @@ def generate_explanation(
     quantum_coherence=None,
     quantum_phase_bias=None,
     quantum_tunneling=None,
+    quantum_energy=None,
+    quantum_decoherence_rate=None,
+    quantum_transition_rate=None,
+    quantum_dominant_mode=None,
 ) -> str:
     parts = []
 
@@ -35,6 +39,14 @@ def generate_explanation(
         quantum_bits.append(f"phase_bias={quantum_phase_bias:.2f}")
     if quantum_tunneling is not None:
         quantum_bits.append(f"tunneling={quantum_tunneling:.2f}")
+    if quantum_energy is not None:
+        quantum_bits.append(f"energy={quantum_energy:.2f}")
+    if quantum_decoherence_rate is not None:
+        quantum_bits.append(f"decoherence={quantum_decoherence_rate:.2f}")
+    if quantum_transition_rate is not None:
+        quantum_bits.append(f"transition={quantum_transition_rate:.2f}")
+    if quantum_dominant_mode is not None:
+        quantum_bits.append(f"dominant_mode={quantum_dominant_mode}")
     parts.append("Quantum layer: " + ", ".join(quantum_bits) + ".")
 
     if setup_info == "no_setup":

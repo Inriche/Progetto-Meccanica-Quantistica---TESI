@@ -34,25 +34,39 @@ def load_signal_candidates(limit: int = 200) -> pd.DataFrame:
         return pd.DataFrame()
 
     conn = get_conn()
-    query = """
+    cols_df = pd.read_sql_query("PRAGMA table_info(signals)", conn)
+    available = set(cols_df["name"].astype(str).tolist()) if not cols_df.empty else set()
+    desired_cols = [
+        "signal_id",
+        "timestamp",
+        "symbol",
+        "decision",
+        "setup",
+        "context",
+        "action",
+        "entry",
+        "sl",
+        "tp1",
+        "tp2",
+        "score",
+        "rr_estimated",
+        "strategy_mode",
+        "news_bias",
+        "news_impact",
+        "quantum_state",
+        "quantum_coherence",
+        "quantum_phase_bias",
+        "quantum_interference",
+        "quantum_tunneling",
+        "quantum_energy",
+        "quantum_decoherence_rate",
+        "quantum_transition_rate",
+        "quantum_dominant_mode",
+    ]
+    select_parts = [col if col in available else f"NULL AS {col}" for col in desired_cols]
+    query = f"""
         SELECT
-            signal_id,
-            timestamp,
-            symbol,
-            decision,
-            setup,
-            context,
-            action,
-            entry,
-            sl,
-            tp1,
-            tp2,
-            score,
-            rr_estimated,
-            strategy_mode,
-            news_bias,
-            news_impact,
-            quantum_state
+            {", ".join(select_parts)}
         FROM signals
         WHERE event_type = 'signal'
           AND decision IN ('BUY', 'SELL')
@@ -91,6 +105,14 @@ def evaluate_market_read(
         "news_bias": signal_row.get("news_bias"),
         "news_impact": signal_row.get("news_impact"),
         "quantum_state": signal_row.get("quantum_state"),
+        "quantum_coherence": signal_row.get("quantum_coherence"),
+        "quantum_phase_bias": signal_row.get("quantum_phase_bias"),
+        "quantum_interference": signal_row.get("quantum_interference"),
+        "quantum_tunneling": signal_row.get("quantum_tunneling"),
+        "quantum_energy": signal_row.get("quantum_energy"),
+        "quantum_decoherence_rate": signal_row.get("quantum_decoherence_rate"),
+        "quantum_transition_rate": signal_row.get("quantum_transition_rate"),
+        "quantum_dominant_mode": signal_row.get("quantum_dominant_mode"),
         "validation_status": "no_data",
         "outcome_status": "no_data",
         "read_score": None,
