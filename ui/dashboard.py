@@ -7,7 +7,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from runtime.alert_engine import load_latest_alert
+from runtime.alert_engine import load_latest_alert, load_alert_transport_status
 from runtime.runtime_config import load_runtime_config, save_runtime_config
 from ui.ui_helpers import (
     derivatives_read_label,
@@ -65,6 +65,16 @@ def format_value(value, *, precision: int | None = None):
     if isinstance(value, (int, float)):
         return value
     return str(value)
+
+
+def dataframe_for_display(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df.copy()
+    out = df.copy()
+    text_cols = out.select_dtypes(include=["object", "string"]).columns
+    if len(text_cols) > 0:
+        out.loc[:, text_cols] = out.loc[:, text_cols].fillna("—")
+    return out
 
 
 def load_recent_events(limit: int = 20) -> pd.DataFrame:
@@ -271,6 +281,7 @@ def _signal_dashboard_context() -> dict:
     latest_snapshot = load_latest_snapshot()
     recent_df = load_recent_events(limit=15)
     latest_alert = load_latest_alert()
+    alert_transport_status = load_alert_transport_status()
     market_read_df = load_market_read_df(
         limit=40,
         horizon_bars=int(runtime_cfg.get("validation_horizon_bars", 16)),
@@ -297,6 +308,7 @@ def _signal_dashboard_context() -> dict:
         "latest_snapshot": latest_snapshot,
         "recent_df": recent_df,
         "latest_alert": latest_alert,
+        "alert_transport_status": alert_transport_status,
         "market_read_df": market_read_df,
         "market_read_summary": market_read_summary,
         "df_candles": df_candles,
@@ -422,6 +434,7 @@ def render_presenter_dashboard(data: dict) -> None:
     market_read_df = data["market_read_df"]
     market_read_summary = data["market_read_summary"]
     latest_alert = data["latest_alert"]
+    alert_transport_status = data["alert_transport_status"]
     latest_ticket = data["latest_ticket"]
     latest_snapshot = data["latest_snapshot"]
     squeeze_label = data["squeeze_label"]
@@ -571,6 +584,24 @@ def render_presenter_dashboard(data: dict) -> None:
             )
 
     st.divider()
+    st.subheader("Alert Status")
+    alert_status_cols = st.columns(3)
+    last_alert_ts = format_value(latest_alert.get("timestamp") if latest_alert else None)
+    with alert_status_cols[0]:
+        st.metric("Alerts Enabled", "Yes" if bool(runtime_cfg.get("alerts_enabled", True)) else "No")
+    with alert_status_cols[1]:
+        tele_cfg = alert_transport_status or {}
+        tele_state = "Configured" if tele_cfg.get("configured") else "Not Configured"
+        st.metric("Telegram", tele_state)
+    with alert_status_cols[2]:
+        st.metric("Last Alert", last_alert_ts)
+    st.caption(
+        f"Telegram transport is {'enabled' if alert_transport_status.get('enabled') else 'disabled'}, "
+        f"configured={alert_transport_status.get('configured')}. "
+        f"Cooldown={alert_transport_status.get('cooldown_minutes', '—')}m."
+    )
+
+    st.divider()
     st.subheader("Recent Important Signals")
     important_df = recent_df.copy()
     if not important_df.empty:
@@ -587,7 +618,7 @@ def render_presenter_dashboard(data: dict) -> None:
             "strategy_mode",
         ]
         display_cols = [c for c in display_cols if c in important_df.columns]
-        important_view = important_df[display_cols].head(8).fillna("—")
+        important_view = dataframe_for_display(important_df[display_cols].head(8))
         st.dataframe(
             important_view,
             width="stretch",
@@ -991,7 +1022,7 @@ def render_technical_dashboard(data: dict) -> None:
     if recent_df.empty:
         st.info("No recent events.")
     else:
-        st.dataframe(recent_df.fillna("—"), width="stretch")
+        st.dataframe(dataframe_for_display(recent_df), width="stretch")
 
     st.divider()
     st.caption("Trading Assistant MVP dashboard")
