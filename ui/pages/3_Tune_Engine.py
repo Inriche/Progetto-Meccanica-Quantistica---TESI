@@ -300,6 +300,40 @@ with st.form("tune_engine_form"):
     )
 
     st.divider()
+    st.subheader("Telegram Alerts")
+
+    telegram_alerts_enabled = st.checkbox(
+        "Enable Telegram Alerts",
+        value=bool(cfg.get("telegram_alerts_enabled", False)),
+    )
+
+    telegram_alert_min_score = st.number_input(
+        "Telegram Alert Min Score",
+        min_value=0,
+        max_value=100,
+        value=int(cfg.get("telegram_alert_min_score", cfg.get("alert_min_score", 74))),
+        step=1,
+    )
+
+    telegram_alert_min_calibrated_score = st.number_input(
+        "Telegram Calibrated Min Score",
+        min_value=0,
+        max_value=100,
+        value=int(cfg.get("telegram_alert_min_calibrated_score", cfg.get("alert_min_score", 74))),
+        step=1,
+    )
+
+    telegram_alert_cooldown_minutes = st.number_input(
+        "Telegram Cooldown Minutes",
+        min_value=1,
+        max_value=1440,
+        value=int(cfg.get("telegram_alert_cooldown_minutes", cfg.get("alert_cooldown_minutes", 30))),
+        step=1,
+    )
+
+    st.caption("Telegram bot token and chat ID are read from environment variables: TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.")
+
+    st.divider()
     st.subheader("Market Read Validation")
 
     validation_horizon_bars = st.number_input(
@@ -354,6 +388,10 @@ with st.form("tune_engine_form"):
                 "blocked_alert_min_score": int(blocked_alert_min_score),
                 "news_alert_min_impact": float(news_alert_min_impact),
                 "alert_cooldown_minutes": int(alert_cooldown_minutes),
+                "telegram_alerts_enabled": bool(telegram_alerts_enabled),
+                "telegram_alert_min_score": int(telegram_alert_min_score),
+                "telegram_alert_min_calibrated_score": int(telegram_alert_min_calibrated_score),
+                "telegram_alert_cooldown_minutes": int(telegram_alert_cooldown_minutes),
                 "validation_horizon_bars": int(validation_horizon_bars),
                 "validation_min_follow_through_pct": float(validation_min_follow_through_pct),
                 "validation_max_adverse_pct": float(validation_max_adverse_pct),

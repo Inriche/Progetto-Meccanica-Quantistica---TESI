@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from runtime.telegram_alerts import send_telegram_alert, telegram_status
 
 ALERT_HISTORY_PATH = "out/alerts.jsonl"
 ALERT_STATE_PATH = "out/alert_state.json"
@@ -90,6 +91,8 @@ def emit_alert(
         state[dedup_key] = payload["timestamp"]
         _save_state(state)
 
+    send_telegram_alert(payload)
+
     return payload
 
 
@@ -124,3 +127,10 @@ def load_latest_alert() -> Optional[Dict[str, Any]]:
         return data if isinstance(data, dict) else None
     except Exception:
         return None
+
+
+def load_alert_transport_status() -> Dict[str, Any]:
+    status = telegram_status()
+    status["alerts_history_exists"] = os.path.exists(ALERT_HISTORY_PATH)
+    status["latest_alert_exists"] = os.path.exists(LATEST_ALERT_PATH)
+    return status

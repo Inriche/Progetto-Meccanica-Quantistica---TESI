@@ -1,5 +1,6 @@
 import os
 import sqlite3
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 
 
@@ -133,6 +134,23 @@ class DB:
         )
         self.conn.commit()
 
+    def _emit_runtime_issue_alert(self, issue_type: str, detail: str) -> None:
+        try:
+            from runtime.alert_engine import emit_alert
+
+            emit_alert(
+                alert_type="runtime_issue",
+                title=f"Database {issue_type} failure",
+                body=detail,
+                severity="critical",
+                created_at=datetime.now(timezone.utc),
+                dedup_key=f"runtime_issue:db:{issue_type}",
+                cooldown_minutes=15,
+                metadata={"issue_type": issue_type, "detail": detail},
+            )
+        except Exception:
+            pass
+
     def insert_decision_log(self, row: Dict[str, Any]) -> None:
         self.conn.execute(
             """
@@ -198,68 +216,72 @@ class DB:
         self.conn.commit()
 
     def insert_signal(self, row: Dict[str, Any]) -> None:
-        self.conn.execute(
-            """
-            INSERT OR IGNORE INTO signals
-            (signal_id, timestamp, symbol, event_type, decision, setup, context, action, why,
-             entry, sl, tp1, tp2, rr_estimated, heuristic_score, score,
-             ob_imbalance, ob_raw, ob_age_ms,
-             funding_rate, oi_now, oi_change_pct, crowding,
-             strategy_mode, strategy_score, scoring_mode, news_bias, news_sentiment, news_impact, news_score,
-             quantum_state, quantum_coherence, quantum_phase_bias, quantum_interference, quantum_tunneling,
-             quantum_energy, quantum_decoherence_rate, quantum_transition_rate, quantum_dominant_mode,
-             raw_hybrid_score, calibrated_hybrid_score, quantum_score,
-             snapshot_path, ticket_path)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                row["signal_id"],
-                row["timestamp"],
-                row["symbol"],
-                row.get("event_type", "signal"),
-                row["decision"],
-                row["setup"],
-                row.get("context"),
-                row.get("action"),
-                row.get("why"),
-                row.get("entry"),
-                row.get("sl"),
-                row.get("tp1"),
-                row.get("tp2"),
-                row.get("rr_estimated"),
-                row.get("heuristic_score"),
-                row.get("score"),
-                row.get("ob_imbalance"),
-                row.get("ob_raw"),
-                row.get("ob_age_ms"),
-                row.get("funding_rate"),
-                row.get("oi_now"),
-                row.get("oi_change_pct"),
-                row.get("crowding"),
-                row.get("strategy_mode"),
-                row.get("strategy_score"),
-                row.get("scoring_mode"),
-                row.get("news_bias"),
-                row.get("news_sentiment"),
-                row.get("news_impact"),
-                row.get("news_score"),
-                row.get("quantum_state"),
-                row.get("quantum_coherence"),
-                row.get("quantum_phase_bias"),
-                row.get("quantum_interference"),
-                row.get("quantum_tunneling"),
-                row.get("quantum_energy"),
-                row.get("quantum_decoherence_rate"),
-                row.get("quantum_transition_rate"),
-                row.get("quantum_dominant_mode"),
-                row.get("raw_hybrid_score"),
-                row.get("calibrated_hybrid_score"),
-                row.get("quantum_score"),
-                row.get("snapshot_path"),
-                row.get("ticket_path"),
-            ),
-        )
-        self.conn.commit()
+        try:
+            self.conn.execute(
+                """
+                INSERT OR IGNORE INTO signals
+                (signal_id, timestamp, symbol, event_type, decision, setup, context, action, why,
+                 entry, sl, tp1, tp2, rr_estimated, heuristic_score, score,
+                 ob_imbalance, ob_raw, ob_age_ms,
+                 funding_rate, oi_now, oi_change_pct, crowding,
+                 strategy_mode, strategy_score, scoring_mode, news_bias, news_sentiment, news_impact, news_score,
+                 quantum_state, quantum_coherence, quantum_phase_bias, quantum_interference, quantum_tunneling,
+                 quantum_energy, quantum_decoherence_rate, quantum_transition_rate, quantum_dominant_mode,
+                 raw_hybrid_score, calibrated_hybrid_score, quantum_score,
+                 snapshot_path, ticket_path)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["signal_id"],
+                    row["timestamp"],
+                    row["symbol"],
+                    row.get("event_type", "signal"),
+                    row["decision"],
+                    row["setup"],
+                    row.get("context"),
+                    row.get("action"),
+                    row.get("why"),
+                    row.get("entry"),
+                    row.get("sl"),
+                    row.get("tp1"),
+                    row.get("tp2"),
+                    row.get("rr_estimated"),
+                    row.get("heuristic_score"),
+                    row.get("score"),
+                    row.get("ob_imbalance"),
+                    row.get("ob_raw"),
+                    row.get("ob_age_ms"),
+                    row.get("funding_rate"),
+                    row.get("oi_now"),
+                    row.get("oi_change_pct"),
+                    row.get("crowding"),
+                    row.get("strategy_mode"),
+                    row.get("strategy_score"),
+                    row.get("scoring_mode"),
+                    row.get("news_bias"),
+                    row.get("news_sentiment"),
+                    row.get("news_impact"),
+                    row.get("news_score"),
+                    row.get("quantum_state"),
+                    row.get("quantum_coherence"),
+                    row.get("quantum_phase_bias"),
+                    row.get("quantum_interference"),
+                    row.get("quantum_tunneling"),
+                    row.get("quantum_energy"),
+                    row.get("quantum_decoherence_rate"),
+                    row.get("quantum_transition_rate"),
+                    row.get("quantum_dominant_mode"),
+                    row.get("raw_hybrid_score"),
+                    row.get("calibrated_hybrid_score"),
+                    row.get("quantum_score"),
+                    row.get("snapshot_path"),
+                    row.get("ticket_path"),
+                ),
+            )
+            self.conn.commit()
+        except Exception as exc:
+            self._emit_runtime_issue_alert("insert_signal", repr(exc))
+            raise
 
     def list_recent_signals(self, limit: int = 10) -> List[Dict[str, Any]]:
         cur = self.conn.execute(

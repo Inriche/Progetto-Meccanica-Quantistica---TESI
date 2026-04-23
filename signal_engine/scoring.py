@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -62,6 +63,22 @@ def _log_ml_warning(message: str) -> None:
     if message != _ML_ARTIFACT_LAST_WARNING:
         logger.warning(message)
         _ML_ARTIFACT_LAST_WARNING = message
+        if "Failed to load ML artifact" in message or "Invalid ML artifact" in message:
+            try:
+                from runtime.alert_engine import emit_alert
+
+                emit_alert(
+                    alert_type="runtime_issue",
+                    title="ML artifact load failure",
+                    body=message,
+                    severity="critical",
+                    created_at=datetime.now(timezone.utc),
+                    dedup_key="runtime_issue:ml_artifact",
+                    cooldown_minutes=15,
+                    metadata={"model_path": MODEL_PATH, "message": message},
+                )
+            except Exception:
+                pass
 
 
 def _load_ml_artifact() -> Optional[Dict[str, Any]]:

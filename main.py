@@ -503,6 +503,40 @@ async def main():
                 metadata=base_metadata,
             )
 
+        calibrated_threshold = float(runtime_cfg.get("telegram_alert_min_calibrated_score", runtime_cfg.get("alert_min_score", 74)))
+        if (
+            decision == "BUY"
+            and setup_name == "BLOCKED"
+            and str(context) == "trend_clean"
+            and str(quantum.state) == "LOW_ENERGY"
+            and getattr(scores, "calibrated_hybrid_score", None) is not None
+            and float(scores.calibrated_hybrid_score) >= calibrated_threshold
+        ):
+            emit_alert(
+                alert_type="experimental_confirmation_match",
+                title="Experimental confirmation filter match",
+                body=(
+                    f"context={context} | setup={setup_name} | decision={decision} "
+                    f"| calibrated={float(scores.calibrated_hybrid_score):.2f} | score={score} "
+                    f"| quantum={quantum.state} | trigger={trigger}"
+                ),
+                severity="info",
+                created_at=now,
+                dedup_key=f"confirm:{CONFIG.symbol.upper()}:{decision}:{setup_name}:{context}:{quantum.state}",
+                cooldown_minutes=int(runtime_cfg.get("telegram_alert_cooldown_minutes", cooldown_minutes)),
+                signal_id=ticket_id,
+                metadata={
+                    "symbol": CONFIG.symbol.upper(),
+                    "decision": decision,
+                    "setup": setup_name,
+                    "context": context,
+                    "quantum_state": quantum.state,
+                    "score": score,
+                    "calibrated_hybrid_score": scores.calibrated_hybrid_score,
+                    "trigger": trigger,
+                },
+            )
+
     async def analyze_and_emit(trigger: str):
         result = await trading_engine.run_cycle(trigger)
         publish_event(

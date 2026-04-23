@@ -1323,3 +1323,63 @@ class TradingEngine:
                 signal_id=ticket_id,
                 metadata=metadata,
             )
+
+        self._emit_confirmation_filter_alert(
+            market=market,
+            draft=draft,
+            scores=scores,
+            ticket_id=ticket_id,
+            trigger=trigger,
+            cooldown_minutes=cooldown_minutes,
+        )
+
+    def _emit_confirmation_filter_alert(
+        self,
+        *,
+        market: MarketState,
+        draft: SignalDraft,
+        scores: ScoreState,
+        ticket_id: str,
+        trigger: str,
+        cooldown_minutes: int,
+    ) -> None:
+        cfg = market.runtime_cfg
+        if not bool(cfg.get("alerts_enabled", True)):
+            return
+
+        calibrated_threshold = float(cfg.get("telegram_alert_min_calibrated_score", cfg.get("alert_min_score", 74)))
+        if (
+            draft.decision == "BUY"
+            and draft.setup_name == "BLOCKED"
+            and str(market.context) == "trend_clean"
+            and str(market.quantum.state) == "LOW_ENERGY"
+            and scores.calibrated_hybrid_score is not None
+            and float(scores.calibrated_hybrid_score) >= calibrated_threshold
+        ):
+            emit_alert(
+                alert_type="experimental_confirmation_match",
+                title="Experimental confirmation filter match",
+                body=(
+                    f"context={market.context} | setup={draft.setup_name} | decision={draft.decision} "
+                    f"| calibrated={float(scores.calibrated_hybrid_score):.2f} | score={draft.score} "
+                    f"| quantum={market.quantum.state} | trigger={trigger}"
+                ),
+                severity="info",
+                created_at=market.now,
+                dedup_key=(
+                    f"confirm:{self.symbol.upper()}:{draft.decision}:{draft.setup_name}:"
+                    f"{market.context}:{market.quantum.state}"
+                ),
+                cooldown_minutes=int(cfg.get("telegram_alert_cooldown_minutes", cooldown_minutes)),
+                signal_id=ticket_id,
+                metadata={
+                    "symbol": self.symbol.upper(),
+                    "decision": draft.decision,
+                    "setup": draft.setup_name,
+                    "context": market.context,
+                    "quantum_state": market.quantum.state,
+                    "score": draft.score,
+                    "calibrated_hybrid_score": scores.calibrated_hybrid_score,
+                    "trigger": trigger,
+                },
+            )
