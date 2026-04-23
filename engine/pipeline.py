@@ -76,6 +76,9 @@ class FeatureState:
 class ScoreState:
     base_score: int
     breakdown: ScoreBreakdown
+    raw_hybrid_score: Optional[float]
+    calibrated_hybrid_score: Optional[float]
+    scoring_mode: str
     orderbook_points: int
     confluence_points: int
     derivatives_points: int
@@ -380,10 +383,13 @@ class TradingEngine:
 
     def compute_all_scores(self, market: MarketState, features: FeatureState) -> ScoreState:
         if features.setup is None or features.rr_estimated is None:
-            zero_breakdown = ScoreBreakdown(score=0, grade="C", components=[])
+            zero_breakdown = ScoreBreakdown(score=0, grade="C", components=[], scoring_mode="heuristic")
             return ScoreState(
                 base_score=0,
                 breakdown=zero_breakdown,
+                raw_hybrid_score=None,
+                calibrated_hybrid_score=None,
+                scoring_mode=zero_breakdown.scoring_mode,
                 orderbook_points=0,
                 confluence_points=0,
                 derivatives_points=0,
@@ -505,6 +511,9 @@ class TradingEngine:
         return ScoreState(
             base_score=breakdown.heuristic_score,
             breakdown=breakdown,
+            raw_hybrid_score=breakdown.raw_hybrid_score,
+            calibrated_hybrid_score=breakdown.calibrated_hybrid_score,
+            scoring_mode=breakdown.scoring_mode,
             orderbook_points=ob_pts,
             confluence_points=conf_pts,
             derivatives_points=deriv_pts,
@@ -884,6 +893,7 @@ class TradingEngine:
                 tp1=draft.tp1,
                 tp2=draft.tp2,
                 rr_estimated=draft.rr_estimated,
+                heuristic_score=scores.base_score,
                 score=draft.score,
                 ob_imbalance=ob_imbalance_persist,
                 ob_raw=ob_raw_persist,
@@ -894,6 +904,7 @@ class TradingEngine:
                 crowding=crowding_persist,
                 strategy_mode=market.strategy_profile.code,
                 strategy_score=scores.strategy_points,
+                scoring_mode=scores.scoring_mode,
                 news_bias=market.news.bias,
                 news_sentiment=market.news.sentiment_score,
                 news_impact=market.news.impact_score,
@@ -907,6 +918,8 @@ class TradingEngine:
                 quantum_decoherence_rate=market.quantum.decoherence_rate,
                 quantum_transition_rate=market.quantum.transition_rate,
                 quantum_dominant_mode=market.quantum.dominant_mode,
+                raw_hybrid_score=scores.raw_hybrid_score,
+                calibrated_hybrid_score=scores.calibrated_hybrid_score,
                 quantum_score=scores.quantum_points,
                 ticket_path=None,
                 snapshot_path=None,
@@ -964,6 +977,14 @@ class TradingEngine:
                 "transition_rate": market.quantum.transition_rate,
                 "dominant_mode": market.quantum.dominant_mode,
                 "points": scores.quantum_points,
+            },
+            "score": {
+                "heuristic_score": scores.base_score,
+                "raw_hybrid_score": scores.raw_hybrid_score,
+                "calibrated_hybrid_score": scores.calibrated_hybrid_score,
+                "final_score": scores.final_score,
+                "grade": scores.grade,
+                "scoring_mode": scores.scoring_mode,
             },
             "liquidity": {
                 "nearest_liquidation_cluster": market.liquidation_cluster,
@@ -1031,6 +1052,7 @@ class TradingEngine:
                 "tp1": draft.tp1,
                 "tp2": draft.tp2,
                 "rr_estimated": draft.rr_estimated,
+                "heuristic_score": scores.base_score,
                 "score": draft.score,
                 "ob_imbalance": ob_imbalance_persist,
                 "ob_raw": ob_raw_persist,
@@ -1041,6 +1063,7 @@ class TradingEngine:
                 "crowding": crowding_persist,
                 "strategy_mode": market.strategy_profile.code,
                 "strategy_score": scores.strategy_points,
+                "scoring_mode": scores.scoring_mode,
                 "news_bias": market.news.bias,
                 "news_sentiment": market.news.sentiment_score,
                 "news_impact": market.news.impact_score,
@@ -1054,6 +1077,8 @@ class TradingEngine:
                 "quantum_decoherence_rate": market.quantum.decoherence_rate,
                 "quantum_transition_rate": market.quantum.transition_rate,
                 "quantum_dominant_mode": market.quantum.dominant_mode,
+                "raw_hybrid_score": scores.raw_hybrid_score,
+                "calibrated_hybrid_score": scores.calibrated_hybrid_score,
                 "quantum_score": scores.quantum_points,
                 "snapshot_path": snapshot_path,
                 "ticket_path": ticket_path,
@@ -1238,10 +1263,12 @@ class TradingEngine:
             "setup": draft.setup_name,
             "action": draft.action,
             "score": draft.score,
+            "heuristic_score": scores.base_score,
             "rr_estimated": draft.rr_estimated,
             "price": market.latest_price,
             "strategy_mode": market.strategy_profile.code,
             "strategy_score": scores.strategy_points,
+            "scoring_mode": scores.scoring_mode,
             "news_bias": market.news.bias,
             "news_impact": market.news.impact_score,
             "news_score": scores.news_points,
@@ -1252,6 +1279,8 @@ class TradingEngine:
             "quantum_decoherence_rate": market.quantum.decoherence_rate,
             "quantum_transition_rate": market.quantum.transition_rate,
             "quantum_dominant_mode": market.quantum.dominant_mode,
+            "raw_hybrid_score": scores.raw_hybrid_score,
+            "calibrated_hybrid_score": scores.calibrated_hybrid_score,
             "context": market.context,
             "squeeze_risk": market.squeeze_risk,
             "risk_can_emit": draft.risk_after.get("can_emit"),

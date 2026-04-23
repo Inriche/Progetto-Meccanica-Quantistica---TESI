@@ -41,54 +41,98 @@ def get_conn():
     return sqlite3.connect(DB_PATH)
 
 
+def get_table_columns(table_name: str) -> list[str]:
+    if not os.path.exists(DB_PATH):
+        return []
+
+    conn = get_conn()
+    try:
+        cur = conn.execute(f"PRAGMA table_info({table_name})")
+        return [row[1] for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def format_value(value, *, precision: int | None = None):
+    if value is None or pd.isna(value):
+        return "—"
+    if isinstance(value, str):
+        return value
+    if precision is not None:
+        try:
+            return round(float(value), precision)
+        except Exception:
+            return str(value)
+    if isinstance(value, (int, float)):
+        return value
+    return str(value)
+
+
 def load_recent_events(limit: int = 20) -> pd.DataFrame:
     if not os.path.exists(DB_PATH):
         return pd.DataFrame()
 
     conn = get_conn()
+    desired_cols = [
+        "timestamp",
+        "event_type",
+        "symbol",
+        "decision",
+        "setup",
+        "context",
+        "action",
+        "why",
+        "entry",
+        "sl",
+        "tp1",
+        "tp2",
+        "rr_estimated",
+        "heuristic_score",
+        "score",
+        "ob_imbalance",
+        "ob_raw",
+        "ob_age_ms",
+        "funding_rate",
+        "oi_now",
+        "oi_change_pct",
+        "crowding",
+        "strategy_mode",
+        "strategy_score",
+        "scoring_mode",
+        "news_bias",
+        "news_sentiment",
+        "news_impact",
+        "news_score",
+        "quantum_state",
+        "quantum_coherence",
+        "quantum_phase_bias",
+        "quantum_interference",
+        "quantum_tunneling",
+        "quantum_energy",
+        "quantum_decoherence_rate",
+        "quantum_transition_rate",
+        "quantum_dominant_mode",
+        "quantum_score",
+        "ticket_path",
+    ]
+    available_cols = set(get_table_columns("signals"))
+    select_cols = [c for c in desired_cols if c in available_cols]
+    if not select_cols:
+        conn.close()
+        return pd.DataFrame()
+
     query = f"""
-        SELECT
-            timestamp,
-            event_type,
-            symbol,
-            decision,
-            setup,
-            context,
-            action,
-            why,
-            entry,
-            sl,
-            tp1,
-            tp2,
-            rr_estimated,
-            score,
-            ob_imbalance,
-            ob_raw,
-            ob_age_ms,
-            funding_rate,
-            oi_now,
-            oi_change_pct,
-            crowding,
-            strategy_mode,
-            strategy_score,
-            news_bias,
-            news_sentiment,
-            news_impact,
-            news_score,
-            quantum_state,
-            quantum_coherence,
-            quantum_phase_bias,
-            quantum_interference,
-            quantum_tunneling,
-            quantum_score,
-            ticket_path
+        SELECT {", ".join(select_cols)}
         FROM signals
         ORDER BY id DESC
         LIMIT {limit}
     """
     df = pd.read_sql_query(query, conn)
     conn.close()
-    return df
+    for col in desired_cols:
+        if col not in df.columns:
+            df[col] = None
+    return df[desired_cols]
 
 
 def load_latest_event():
@@ -706,7 +750,12 @@ with right:
     st.subheader("Latest Event Details")
     st.write(f"**Event Type:** {latest_event.get('event_type', 'N/A')}")
     st.write(f"**Symbol:** {latest_event.get('symbol', 'N/A')}")
-    st.write(f"**Score:** {latest_event.get('score', 'N/A')}")
+    st.write(f"**Active Score:** {format_value(latest_event.get('score'))}")
+    st.write(f"**Legacy / Heuristic Score:** {format_value(latest_event.get('heuristic_score'))}")
+    st.write(f"**Strategy Score:** {format_value(latest_event.get('strategy_score'))}")
+    st.write(f"**Raw Hybrid Score:** {format_value(latest_event.get('raw_hybrid_score'), precision=2)}")
+    st.write(f"**Calibrated Hybrid Score:** {format_value(latest_event.get('calibrated_hybrid_score'), precision=2)}")
+    st.write(f"**Scoring Mode:** {format_value(latest_event.get('scoring_mode'))}")
     st.write(f"**RR Estimated:** {latest_event.get('rr_estimated', 'N/A')}")
     st.write(f"**Quantum Score:** {latest_event.get('quantum_score', 'N/A')}")
     st.write(f"**Entry:** {latest_event.get('entry', 'N/A')}")
@@ -763,7 +812,7 @@ st.subheader("Recent Journal Events")
 if recent_df.empty:
     st.info("No recent events.")
 else:
-    st.dataframe(recent_df, width="stretch")
+    st.dataframe(recent_df.fillna("—"), width="stretch")
 
 st.divider()
 st.caption("Trading Assistant MVP dashboard")

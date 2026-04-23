@@ -1,20 +1,28 @@
 from dataclasses import dataclass
+from dataclasses import dataclass
+import logging
 import os
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 from runtime.runtime_config import load_runtime_config
 
 MODEL_PATH = "out/model.joblib"
 # Scoring mode:
 # - "heuristic": legacy rules only
-# - "hybrid": blend heuristic + ML probability
+# - "hybrid": ML-weighted calibrated blend of heuristic and ML probability
 # - "ml": ML-only when model is available, otherwise safe heuristic fallback
 SCORING_MODE = os.getenv("SCORING_MODE", "hybrid").strip().lower()
 _SCORING_MODES = {"heuristic", "hybrid", "ml"}
 
 _ML_ARTIFACT_CACHE: Optional[Dict[str, Any]] = None
-_ML_ARTIFACT_LOAD_ATTEMPTED = False
+_ML_ARTIFACT_MTIME: Optional[float] = None
+_ML_ARTIFACT_LAST_ATTEMPT: float = 0.0
+_ML_ARTIFACT_LAST_WARNING: Optional[str] = None
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -23,6 +31,9 @@ class ScoreBreakdown:
     grade: str
     components: List[Tuple[str, int]]
     heuristic_score: int = 0
+    raw_hybrid_score: Optional[float] = None
+    calibrated_hybrid_score: Optional[float] = None
+    scoring_mode: str = "hybrid"
 
 
 def _normalize_mode(value: Any) -> str:
@@ -46,15 +57,33 @@ def _resolve_scoring_mode() -> str:
     return _normalize_mode(SCORING_MODE)
 
 
+def _log_ml_warning(message: str) -> None:
+    global _ML_ARTIFACT_LAST_WARNING
+    if message != _ML_ARTIFACT_LAST_WARNING:
+        logger.warning(message)
+        _ML_ARTIFACT_LAST_WARNING = message
+
+
 def _load_ml_artifact() -> Optional[Dict[str, Any]]:
-    global _ML_ARTIFACT_CACHE, _ML_ARTIFACT_LOAD_ATTEMPTED
-    if _ML_ARTIFACT_LOAD_ATTEMPTED:
+    global _ML_ARTIFACT_CACHE, _ML_ARTIFACT_MTIME, _ML_ARTIFACT_LAST_ATTEMPT
+
+    if not os.path.exists(MODEL_PATH):
+        if _ML_ARTIFACT_CACHE is None:
+            _log_ml_warning(f"[scoring] ML artifact missing at {MODEL_PATH}; hybrid fields unavailable until the model is trained.")
         return _ML_ARTIFACT_CACHE
 
-    _ML_ARTIFACT_LOAD_ATTEMPTED = True
-    if not os.path.exists(MODEL_PATH):
-        _ML_ARTIFACT_CACHE = None
+    try:
+        current_mtime = os.path.getmtime(MODEL_PATH)
+    except OSError:
+        current_mtime = None
+
+    if _ML_ARTIFACT_CACHE is not None and current_mtime is not None and _ML_ARTIFACT_MTIME == current_mtime:
+        return _ML_ARTIFACT_CACHE
+
+    now = time.monotonic()
+    if _ML_ARTIFACT_CACHE is None and (now - _ML_ARTIFACT_LAST_ATTEMPT) < 2.0:
         return None
+    _ML_ARTIFACT_LAST_ATTEMPT = now
 
     try:
         import joblib
@@ -62,23 +91,27 @@ def _load_ml_artifact() -> Optional[Dict[str, Any]]:
         artifact = joblib.load(MODEL_PATH)
         if isinstance(artifact, dict) and "pipeline" in artifact:
             _ML_ARTIFACT_CACHE = artifact
+            _ML_ARTIFACT_MTIME = current_mtime
             return artifact
-    except Exception:
-        _ML_ARTIFACT_CACHE = None
-        return None
+        _log_ml_warning(
+            f"[scoring] Invalid ML artifact at {MODEL_PATH}; expected a dict with a pipeline."
+        )
+    except Exception as exc:
+        _log_ml_warning(f"[scoring] Failed to load ML artifact at {MODEL_PATH}: {exc!r}")
 
-    _ML_ARTIFACT_CACHE = None
-    return None
+    return _ML_ARTIFACT_CACHE
 
 
 def _predict_ml_probability(feature_row: Dict[str, Any]) -> Optional[float]:
     artifact = _load_ml_artifact()
     if artifact is None:
+        _log_ml_warning("[scoring] ML probability unavailable because the artifact could not be loaded.")
         return None
 
     pipeline = artifact.get("pipeline")
     feature_columns = artifact.get("feature_columns", [])
     if pipeline is None or not feature_columns:
+        _log_ml_warning("[scoring] ML probability unavailable because the artifact is missing a pipeline or feature columns.")
         return None
 
     try:
@@ -93,17 +126,27 @@ def _predict_ml_probability(feature_row: Dict[str, Any]) -> Optional[float]:
             classifier = getattr(pipeline, "named_steps", {}).get("classifier")
             classes = getattr(classifier, "classes_", None)
         if classes is None:
+            _log_ml_warning("[scoring] ML probability unavailable because classifier classes could not be resolved.")
             return None
 
         classes_list = list(classes)
         if 1 not in classes_list:
+            _log_ml_warning("[scoring] ML probability unavailable because class 1 is not present in the classifier outputs.")
             return None
         positive_idx = classes_list.index(1)
         if positive_idx >= len(proba[0]):
+            _log_ml_warning("[scoring] ML probability unavailable because the positive class index is outside the predict_proba output.")
             return None
         return float(proba[0][positive_idx])
-    except Exception:
+    except Exception as exc:
+        _log_ml_warning(f"[scoring] ML probability unavailable because predict_proba failed: {exc!r}")
         return None
+
+
+def _bounded_score(value: float) -> int:
+    if not np.isfinite(value):
+        return 0
+    return max(0, min(100, int(round(float(value)))))
 
 
 def compute_score(
@@ -218,21 +261,33 @@ def compute_score(
         if ml_payload.get("score") is None:
             ml_payload["score"] = heuristic_score
 
-    ml_probability = _predict_ml_probability(ml_payload)
-
     mode = _resolve_scoring_mode()
+    raw_hybrid_score: Optional[float] = None
+    calibrated_hybrid_score: Optional[float] = None
+    ml_probability = _predict_ml_probability(ml_payload)
+    effective_mode = mode
+    if ml_probability is not None:
+        heuristic_norm = float(np.clip(heuristic_score / 100.0, 0.0, 1.0))
+        ml_prob = float(np.clip(ml_probability, 0.0, 1.0))
+        legacy_hybrid_score = (0.65 * heuristic_score) + (0.35 * (ml_prob * 100.0))
+        raw_hybrid_score = float(legacy_hybrid_score)
+        raw_hybrid_probability = (0.20 * heuristic_norm) + (0.80 * ml_prob)
+        calibrated_hybrid_score = raw_hybrid_probability * 100.0
+    elif mode in ("hybrid", "ml"):
+        effective_mode = "heuristic_fallback"
+
     if mode == "heuristic":
         score = heuristic_score
     elif ml_probability is None:
         score = heuristic_score
     elif mode == "ml":
-        score = max(0, min(100, int(round(float(ml_probability) * 100.0))))
+        score = _bounded_score(float(ml_probability) * 100.0)
         comps.append(("ml_adjustment", int(score - heuristic_score)))
     else:
-        ml_score = max(0, min(100, int(round(float(ml_probability) * 100.0))))
-        final_score = int(round((0.65 * heuristic_score) + (0.35 * ml_score)))
-        comps.append(("ml_adjustment", int(final_score - heuristic_score)))
-        score = max(0, min(100, final_score))
+        # Keep the legacy blend as a reference score, but use a more ML-driven
+        # calibrated score for thresholding because it tracks outcomes better.
+        score = _bounded_score(calibrated_hybrid_score)
+        comps.append(("ml_adjustment", int(score - heuristic_score)))
 
     grade = "A" if score >= 80 else ("B" if score >= 70 else "C")
 
@@ -241,4 +296,7 @@ def compute_score(
         grade=grade,
         components=comps,
         heuristic_score=heuristic_score,
+        raw_hybrid_score=raw_hybrid_score,
+        calibrated_hybrid_score=calibrated_hybrid_score,
+        scoring_mode=effective_mode,
     )

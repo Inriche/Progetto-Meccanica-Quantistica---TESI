@@ -92,6 +92,8 @@ def _load_signal_feature_rows(db_path: str, limit: Optional[int] = None) -> pd.D
         "quantum_decoherence_rate",
         "quantum_transition_rate",
         "quantum_dominant_mode",
+        "raw_hybrid_score",
+        "calibrated_hybrid_score",
         "quantum_score",
         "ticket_path",
     ]
@@ -274,6 +276,8 @@ def build_training_dataset(
         "quantum_decoherence_rate",
         "quantum_transition_rate",
         "quantum_dominant_mode",
+        "raw_hybrid_score",
+        "calibrated_hybrid_score",
         "quantum_score",
         "signal_id",
         "ticket_path",

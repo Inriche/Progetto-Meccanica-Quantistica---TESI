@@ -271,6 +271,7 @@ async def main():
         tp2,
         rr_estimated,
         score,
+        heuristic_score=None,
         ob_imbalance=None,
         ob_raw=None,
         ob_age_ms=None,
@@ -293,6 +294,9 @@ async def main():
         quantum_decoherence_rate=None,
         quantum_transition_rate=None,
         quantum_dominant_mode=None,
+        raw_hybrid_score=None,
+        calibrated_hybrid_score=None,
+        scoring_mode=None,
         quantum_score=None,
         ticket_path=None,
         snapshot_path=None,
@@ -329,6 +333,7 @@ async def main():
                 "tp1": tp1,
                 "tp2": tp2,
                 "rr_estimated": rr_estimated,
+                "heuristic_score": heuristic_score,
                 "score": score,
                 "ob_imbalance": ob_imbalance,
                 "ob_raw": ob_raw,
@@ -339,6 +344,7 @@ async def main():
                 "crowding": crowding,
                 "strategy_mode": strategy_mode,
                 "strategy_score": strategy_score,
+                "scoring_mode": scoring_mode,
                 "news_bias": news_bias,
                 "news_sentiment": news_sentiment,
                 "news_impact": news_impact,
@@ -352,6 +358,8 @@ async def main():
                 "quantum_decoherence_rate": quantum_decoherence_rate,
                 "quantum_transition_rate": quantum_transition_rate,
                 "quantum_dominant_mode": quantum_dominant_mode,
+                "raw_hybrid_score": raw_hybrid_score,
+                "calibrated_hybrid_score": calibrated_hybrid_score,
                 "quantum_score": quantum_score,
                 "snapshot_path": snapshot_path,
                 "ticket_path": ticket_path,
@@ -692,13 +700,15 @@ async def main():
                     f"ob={r.get('ob_imbalance')} raw={r.get('ob_raw')} age={r.get('ob_age_ms')} | "
                     f"funding={r.get('funding_rate')} oi_now={r.get('oi_now')} "
                     f"oi_change={r.get('oi_change_pct')} crowding={r.get('crowding')} | "
-                    f"strategy={r.get('strategy_mode')} strategy_score={r.get('strategy_score')} | "
+                    f"strategy={r.get('strategy_mode')} strategy_score={r.get('strategy_score')} "
+                    f"scoring_mode={r.get('scoring_mode')} heuristic_score={r.get('heuristic_score')} | "
                     f"news_bias={r.get('news_bias')} news_sentiment={r.get('news_sentiment')} "
                     f"news_impact={r.get('news_impact')} news_score={r.get('news_score')} | "
                     f"quantum_state={r.get('quantum_state')} coherence={r.get('quantum_coherence')} "
                     f"phase={r.get('quantum_phase_bias')} tunneling={r.get('quantum_tunneling')} "
                     f"energy={r.get('quantum_energy')} decoherence={r.get('quantum_decoherence_rate')} "
                     f"transition={r.get('quantum_transition_rate')} dominant_mode={r.get('quantum_dominant_mode')} "
+                    f"raw_hybrid={r.get('raw_hybrid_score')} calibrated_hybrid={r.get('calibrated_hybrid_score')} "
                     f"quant_score={r.get('quantum_score')}"
                 )
                 print(f"why={r['why']}")

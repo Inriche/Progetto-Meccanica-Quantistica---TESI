@@ -14,39 +14,95 @@ def get_conn():
     return sqlite3.connect(DB_PATH)
 
 
+def get_table_columns(table_name: str) -> list[str]:
+    if not os.path.exists(DB_PATH):
+        return []
+
+    conn = get_conn()
+    try:
+        cur = conn.execute(f"PRAGMA table_info({table_name})")
+        return [row[1] for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
 def load_signals_df() -> pd.DataFrame:
     if not os.path.exists(DB_PATH):
         return pd.DataFrame()
 
     conn = get_conn()
+    desired_cols = [
+        "signal_id",
+        "id",
+        "timestamp",
+        "event_type",
+        "decision",
+        "setup",
+        "context",
+        "action",
+        "score",
+        "heuristic_score",
+        "rr_estimated",
+        "strategy_mode",
+        "strategy_score",
+        "scoring_mode",
+        "news_bias",
+        "news_sentiment",
+        "news_impact",
+        "news_score",
+        "quantum_state",
+        "quantum_coherence",
+        "raw_hybrid_score",
+        "calibrated_hybrid_score",
+        "quantum_score",
+        "why",
+    ]
+    available_cols = set(get_table_columns("signals"))
+    select_cols = [c for c in desired_cols if c in available_cols]
+    if "id" not in select_cols and "id" in available_cols:
+        select_cols.insert(1, "id")
+    if not select_cols:
+        conn.close()
+        return pd.DataFrame()
+
     query = """
-        SELECT
-            signal_id,
-            id as event_id,
-            timestamp,
-            event_type,
-            decision,
-            setup,
-            context,
-            action,
-            score,
-            rr_estimated,
-            strategy_mode,
-            strategy_score,
-            news_bias,
-            news_sentiment,
-            news_impact,
-            news_score,
-            quantum_state,
-            quantum_coherence,
-            quantum_score,
-            why
+        SELECT {cols}
         FROM signals
         WHERE event_type = 'signal'
         ORDER BY id DESC
-    """
+    """.format(cols=", ".join(select_cols))
     df = pd.read_sql_query(query, conn)
     conn.close()
+    if "id" in df.columns and "event_id" not in df.columns:
+        df = df.rename(columns={"id": "event_id"})
+    for col in [
+        "signal_id",
+        "event_id",
+        "timestamp",
+        "event_type",
+        "decision",
+        "setup",
+        "context",
+        "action",
+        "score",
+        "heuristic_score",
+        "rr_estimated",
+        "strategy_mode",
+        "strategy_score",
+        "scoring_mode",
+        "news_bias",
+        "news_sentiment",
+        "news_impact",
+        "news_score",
+        "quantum_state",
+        "quantum_coherence",
+        "raw_hybrid_score",
+        "calibrated_hybrid_score",
+        "quantum_score",
+        "why",
+    ]:
+        if col not in df.columns:
+            df[col] = None
     return df
 
 
@@ -247,13 +303,17 @@ view_cols = [
     "action",
     "decision",
     "score",
+    "heuristic_score",
     "rr_estimated",
     "strategy_mode",
     "strategy_score",
+    "scoring_mode",
     "news_bias",
     "news_score",
     "quantum_state",
     "quantum_coherence",
+    "raw_hybrid_score",
+    "calibrated_hybrid_score",
     "quantum_score",
     "note",
     "timestamp_review",

@@ -62,6 +62,8 @@ def load_signal_candidates(limit: int = 200) -> pd.DataFrame:
         "quantum_decoherence_rate",
         "quantum_transition_rate",
         "quantum_dominant_mode",
+        "raw_hybrid_score",
+        "calibrated_hybrid_score",
     ]
     select_parts = [col if col in available else f"NULL AS {col}" for col in desired_cols]
     query = f"""
@@ -113,6 +115,8 @@ def evaluate_market_read(
         "quantum_decoherence_rate": signal_row.get("quantum_decoherence_rate"),
         "quantum_transition_rate": signal_row.get("quantum_transition_rate"),
         "quantum_dominant_mode": signal_row.get("quantum_dominant_mode"),
+        "raw_hybrid_score": signal_row.get("raw_hybrid_score"),
+        "calibrated_hybrid_score": signal_row.get("calibrated_hybrid_score"),
         "validation_status": "no_data",
         "outcome_status": "no_data",
         "read_score": None,

@@ -191,6 +191,8 @@ def load_historical_inputs(config: BacktestConfig) -> pd.DataFrame:
         "quantum_decoherence_rate",
         "quantum_transition_rate",
         "quantum_dominant_mode",
+        "raw_hybrid_score",
+        "calibrated_hybrid_score",
         "quantum_score",
         "snapshot_path",
         "ticket_path",
