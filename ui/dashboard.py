@@ -44,7 +44,6 @@ def get_conn():
 def get_table_columns(table_name: str) -> list[str]:
     if not os.path.exists(DB_PATH):
         return []
-
     conn = get_conn()
     try:
         cur = conn.execute(f"PRAGMA table_info({table_name})")
@@ -145,33 +144,26 @@ def load_latest_event():
 def load_latest_ticket():
     if not TICKETS_DIR.exists():
         return None
-
     files = sorted(TICKETS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not files:
         return None
-
-    latest = files[0]
-    with open(latest, "r", encoding="utf-8") as f:
+    with open(files[0], "r", encoding="utf-8") as f:
         return json.load(f)
 
 
 def load_latest_snapshot():
     if not SNAPSHOTS_DIR.exists():
         return None
-
     files = sorted(SNAPSHOTS_DIR.glob("*.png"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not files:
         return None
-
     return files[0]
 
 
-def load_recent_candles(limit=200):
+def load_recent_candles(limit: int = 200) -> pd.DataFrame:
     if not os.path.exists(DB_PATH):
         return pd.DataFrame()
-
     conn = get_conn()
-
     query = f"""
         SELECT open_time, open, high, low, close
         FROM candles
@@ -179,13 +171,10 @@ def load_recent_candles(limit=200):
         ORDER BY open_time DESC
         LIMIT {limit}
     """
-
     df = pd.read_sql_query(query, conn)
     conn.close()
-
     if df.empty:
         return df
-
     df = df.sort_values("open_time").copy()
     df.loc[:, "time"] = pd.to_datetime(df["open_time"], unit="ms")
     return df
@@ -275,544 +264,749 @@ def pressure_label(imb):
     return "NEUTRAL", "⚪"
 
 
-st.title("Trading Assistant Dashboard")
-
-top1, top2, top3 = st.columns([1, 1, 1])
-
-with top1:
-    if st.button("Refresh"):
-        st.rerun()
-
-with top2:
-    if st.button("Analyze now"):
-        send_command("a")
-        st.success("Analyze command queued.")
-
-with top3:
-    if st.button("Status snapshot"):
-        send_command("s")
-        st.success("Status command queued.")
-
-runtime_cfg = load_runtime_config()
-active_scoring_mode = normalize_scoring_mode(runtime_cfg.get("scoring_mode"))
-
-sm1, sm2 = st.columns([1, 2])
-with sm1:
-    selected_scoring_mode = st.selectbox(
-        "Scoring Approach",
-        options=list(SCORING_MODES),
-        index=list(SCORING_MODES).index(active_scoring_mode),
-        key="scoring_mode_selector",
+def _signal_dashboard_context() -> dict:
+    runtime_cfg = load_runtime_config()
+    latest_event = load_latest_event()
+    latest_ticket = load_latest_ticket()
+    latest_snapshot = load_latest_snapshot()
+    recent_df = load_recent_events(limit=15)
+    latest_alert = load_latest_alert()
+    market_read_df = load_market_read_df(
+        limit=40,
+        horizon_bars=int(runtime_cfg.get("validation_horizon_bars", 16)),
+        min_follow_through_pct=float(runtime_cfg.get("validation_min_follow_through_pct", 0.0035)),
+        max_adverse_pct=float(runtime_cfg.get("validation_max_adverse_pct", 0.0025)),
     )
-with sm2:
-    st.markdown(f"**Active Scoring Mode:** `{active_scoring_mode}`")
-    st.caption("La modifica viene salvata in `out/config_runtime.json` e applicata nei cicli successivi.")
-
-if selected_scoring_mode != active_scoring_mode:
-    if save_scoring_mode(selected_scoring_mode):
-        st.success(f"Scoring mode aggiornato a `{selected_scoring_mode}`.")
-        st.rerun()
-
-latest_event = load_latest_event()
-latest_ticket = load_latest_ticket()
-latest_snapshot = load_latest_snapshot()
-recent_df = load_recent_events(limit=15)
-latest_alert = load_latest_alert()
-market_read_df = load_market_read_df(
-    limit=40,
-    horizon_bars=int(runtime_cfg.get("validation_horizon_bars", 16)),
-    min_follow_through_pct=float(runtime_cfg.get("validation_min_follow_through_pct", 0.0035)),
-    max_adverse_pct=float(runtime_cfg.get("validation_max_adverse_pct", 0.0025)),
-)
-market_read_summary = summarize_market_read(market_read_df)
-
-if latest_event is None:
-    st.warning("No events found yet.")
-    st.stop()
-
-df_candles = load_recent_candles()
-latest_price = None
-if not df_candles.empty:
-    latest_price = float(df_candles["close"].iloc[-1])
-
-liq_cluster = None
-if latest_ticket is not None:
-    liq_cluster = latest_ticket.get("liquidity", {}).get("nearest_liquidation_cluster")
-
-squeeze_label, squeeze_icon = squeeze_risk_label(
-    latest_price,
-    liq_cluster,
-    high_pct=float(runtime_cfg["squeeze_risk_high_pct"]),
-    medium_pct=float(runtime_cfg["squeeze_risk_medium_pct"]),
-)
-
-st.subheader("Live Status")
-
-c1, c2, c3, c4, c5 = st.columns(5)
-
-with c1:
-    color_badge("Decision", str(latest_event.get("decision", "N/A")))
-
-with c2:
-    color_badge("Setup", str(latest_event.get("setup", "N/A")))
-
-with c3:
-    color_badge("Context", str(latest_event.get("context", "N/A")))
-
-with c4:
-    color_badge("Action", str(latest_event.get("action", "N/A")))
-
-with c5:
-    color_badge("Quantum", str(latest_event.get("quantum_state", "N/A")))
-
-st.write(f"**Timestamp:** {latest_event.get('timestamp', 'N/A')}")
-st.write(f"**Why:** {latest_event.get('why', 'N/A')}")
-
-meta1, meta2, meta3 = st.columns(3)
-with meta1:
-    st.metric("Strategy Mode", str(latest_event.get("strategy_mode", "N/A")))
-with meta2:
-    st.metric("News Bias", str(latest_event.get("news_bias", "N/A")))
-with meta3:
-    news_score_val = latest_event.get("news_score")
-    st.metric("News Score", "N/A" if news_score_val is None or pd.isna(news_score_val) else int(news_score_val))
-
-st.divider()
-
-st.subheader("Alerts And Validation")
-
-av1, av2, av3, av4 = st.columns(4)
-
-with av1:
-    st.metric(
-        "Validated Rate",
-        "N/A" if market_read_summary["validation_rate"] is None else f"{market_read_summary['validation_rate']:.2f}%",
+    market_read_summary = summarize_market_read(market_read_df)
+    df_candles = load_recent_candles()
+    latest_price = float(df_candles["close"].iloc[-1]) if not df_candles.empty else None
+    liq_cluster = None
+    if latest_ticket is not None:
+        liq_cluster = latest_ticket.get("liquidity", {}).get("nearest_liquidation_cluster")
+    squeeze_label, squeeze_icon = squeeze_risk_label(
+        latest_price,
+        liq_cluster,
+        high_pct=float(runtime_cfg["squeeze_risk_high_pct"]),
+        medium_pct=float(runtime_cfg["squeeze_risk_medium_pct"]),
     )
+    return {
+        "runtime_cfg": runtime_cfg,
+        "active_scoring_mode": normalize_scoring_mode(runtime_cfg.get("scoring_mode")),
+        "latest_event": latest_event,
+        "latest_ticket": latest_ticket,
+        "latest_snapshot": latest_snapshot,
+        "recent_df": recent_df,
+        "latest_alert": latest_alert,
+        "market_read_df": market_read_df,
+        "market_read_summary": market_read_summary,
+        "df_candles": df_candles,
+        "latest_price": latest_price,
+        "liq_cluster": liq_cluster,
+        "squeeze_label": squeeze_label,
+        "squeeze_icon": squeeze_icon,
+    }
 
-with av2:
-    st.metric(
-        "Avg Read Score",
-        "N/A" if market_read_summary["avg_read_score"] is None else market_read_summary["avg_read_score"],
-    )
 
-with av3:
-    st.metric(
-        "Validated / Completed",
-        f"{market_read_summary['validated']}/{market_read_summary['completed']}",
-    )
-
-with av4:
-    if latest_alert is None:
-        st.metric("Latest Alert", "none")
-    else:
-        st.metric("Latest Alert", str(latest_alert.get("type", "N/A")))
-
-if latest_alert is not None:
+def _presenter_card(title: str, value, subtitle: str = "", tone: str = "#0f172a") -> None:
     st.markdown(
         f"""
-        **Alert Severity:** {latest_alert.get("severity", "N/A")}  
-        **Alert Title:** {latest_alert.get("title", "N/A")}  
-        **Alert Body:** {latest_alert.get("body", "N/A")}
-        """
+        <div style="
+            background:{tone};
+            color:white;
+            padding:18px 18px 16px 18px;
+            border-radius:16px;
+            border:1px solid #334155;
+            min-height:110px;
+        ">
+            <div style="font-size:14px; color:#cbd5e1; margin-bottom:6px; text-transform:uppercase; letter-spacing:0.04em;">{title}</div>
+            <div style="font-size:28px; font-weight:700; line-height:1.1;">{value}</div>
+            <div style="font-size:13px; color:#94a3b8; margin-top:8px;">{subtitle}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
-completed_reads = (
-    market_read_df[market_read_df["validation_status"].isin(["validated", "invalidated", "mixed"])].copy()
-    if not market_read_df.empty
-    else pd.DataFrame()
-)
-if not completed_reads.empty:
-    latest_read = completed_reads.iloc[0]
+
+def _simple_series_chart(df: pd.DataFrame, x_col: str, title: str, color: str = "#38bdf8") -> None:
+    if df.empty or x_col not in df.columns:
+        st.info(f"No {title.lower()} data yet.")
+        return
+    counts = df[x_col].fillna("N/A").value_counts().reset_index()
+    counts.columns = [x_col, "count"]
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=counts[x_col].astype(str), y=counts["count"], marker_color=color))
+    fig.update_layout(height=280, margin=dict(l=10, r=10, t=30, b=10), title=title)
+    st.plotly_chart(fig, width="stretch")
+
+
+def humanize_presenter_label(value):
+    mapping = {
+        "LOW_ENERGY": "Low Energy",
+        "trend_clean": "Clean Trend",
+        "transition": "Transition Phase",
+        "BLOCKED": "Blocked by Rules",
+        "FLAT": "No Trade Action",
+        "BUY": "Buy",
+        "SELL": "Sell",
+        "WARMING_UP": "Warming Up",
+        "DECOHERENT": "Decoherent",
+        "TRANSITIONAL": "Transitional",
+        "COHERENT_BULLISH": "Coherent Bullish",
+        "COHERENT_BEARISH": "Coherent Bearish",
+        "BULLISH_TUNNEL": "Bullish Tunnel",
+        "BEARISH_TUNNEL": "Bearish Tunnel",
+    }
+    if value is None or pd.isna(value):
+        return "—"
+    return mapping.get(str(value), str(value).replace("_", " ").title())
+
+
+def presenter_badge(value, *, kind: str = "generic") -> str:
+    palette = {
+        "BUY": "#16a34a",
+        "SELL": "#dc2626",
+        "FLAT": "#64748b",
+        "BLOCKED": "#f97316",
+        "quantum": {
+            "LOW_ENERGY": "#0ea5e9",
+            "WARMING_UP": "#64748b",
+            "DECOHERENT": "#f97316",
+            "TRANSITIONAL": "#64748b",
+            "COHERENT_BULLISH": "#16a34a",
+            "COHERENT_BEARISH": "#dc2626",
+            "BULLISH_TUNNEL": "#22c55e",
+            "BEARISH_TUNNEL": "#f43f5e",
+        },
+    }
+    if value is None or pd.isna(value):
+        return "background:#334155;color:#e2e8f0;"
+    key = str(value)
+    if kind == "quantum":
+        color = palette["quantum"].get(key, "#334155")
+    else:
+        color = palette.get(key, "#334155")
+    return (
+        f"background:{color};color:white;padding:6px 10px;border-radius:999px;"
+        "font-size:12px;font-weight:700;display:inline-block;letter-spacing:0.02em;"
+    )
+
+
+def presenter_signal_summary(latest_event: dict) -> str:
+    decision = humanize_presenter_label(latest_event.get("decision"))
+    setup = humanize_presenter_label(latest_event.get("setup"))
+    context = humanize_presenter_label(latest_event.get("context"))
+    quantum_state = humanize_presenter_label(latest_event.get("quantum_state"))
+    score = format_value(latest_event.get("score"))
+    calibrated = format_value(latest_event.get("calibrated_hybrid_score"), precision=2)
+    if latest_event.get("decision") in ("BUY", "SELL"):
+        return (
+            f"{decision} setup in {context}. "
+            f"{setup} is active with calibrated score {calibrated} and active score {score}. "
+            f"Quantum state is {quantum_state}."
+        )
+    if latest_event.get("decision") == "BLOCKED":
+        return (
+            f"Signal was blocked by rules in {context}. "
+            f"Setup {setup} remains visible for review, but the system is not allowing execution."
+        )
+    return (
+        f"No trade action is active. Current regime is {context} with quantum state {quantum_state}. "
+        f"Latest score is {score}."
+    )
+
+
+def render_presenter_dashboard(data: dict) -> None:
+    runtime_cfg = data["runtime_cfg"]
+    latest_event = data["latest_event"] or {}
+    recent_df = data["recent_df"]
+    market_read_df = data["market_read_df"]
+    market_read_summary = data["market_read_summary"]
+    latest_alert = data["latest_alert"]
+    latest_ticket = data["latest_ticket"]
+    latest_snapshot = data["latest_snapshot"]
+    squeeze_label = data["squeeze_label"]
+    squeeze_icon = data["squeeze_icon"]
+    liq_cluster = data["liq_cluster"]
+    latest_price = data["latest_price"]
+
+    st.title("Trading Assistant Dashboard")
+    st.caption("Presenter Mode")
+
+    dashboard_mode_label = "Presenter Mode"
+    system_status = format_value(latest_event.get("event_type", "—"))
+    last_update = format_value(latest_event.get("timestamp"))
+    latest_signal_state = f"{humanize_presenter_label(latest_event.get('decision'))} / {humanize_presenter_label(latest_event.get('setup'))}"
+    scoring_mode = format_value(data["active_scoring_mode"])
+
     st.markdown(
         f"""
-        **Latest Completed Read:** {latest_read.get("validation_status", "N/A")}  
-        **Read Score:** {latest_read.get("read_score", "N/A")}  
-        **Validation Note:** {latest_read.get("validation_note", "N/A")}
-        """
-    )
-
-st.divider()
-
-st.subheader("Summary Panel")
-
-context_val = str(latest_event.get("context", "N/A"))
-action_val = str(latest_event.get("action", "N/A"))
-imb_summary = latest_event.get("ob_imbalance")
-crowding_val = latest_event.get("crowding", "N/A")
-funding_val = latest_event.get("funding_rate")
-oi_change_val = latest_event.get("oi_change_pct")
-quantum_state_val = str(latest_event.get("quantum_state", "N/A"))
-quantum_coherence_val = latest_event.get("quantum_coherence")
-quantum_phase_val = latest_event.get("quantum_phase_bias")
-strategy_mode_val = str(latest_event.get("strategy_mode", "N/A"))
-news_bias_val = str(latest_event.get("news_bias", "N/A"))
-news_sentiment_val = latest_event.get("news_sentiment")
-news_impact_val = latest_event.get("news_impact")
-
-structure_label, structure_icon = structure_read_label(context_val)
-quantum_label, quantum_icon = quantum_read_label(
-    quantum_state_val,
-    quantum_coherence_val,
-    quantum_phase_val,
-)
-orderbook_label, orderbook_icon = orderbook_read_label(imb_summary)
-deriv_label, deriv_icon = derivatives_read_label(crowding_val, funding_val, oi_change_val)
-
-s1, s2, s3, s4, s5 = st.columns(5)
-
-with s1:
-    st.markdown(f"### {structure_icon} Structure")
-    st.write(structure_label)
-
-with s2:
-    st.markdown(f"### {quantum_icon} Quantum")
-    st.write(quantum_label)
-
-with s3:
-    st.markdown(f"### {orderbook_icon} Order Book")
-    st.write(orderbook_label)
-
-with s4:
-    st.markdown(f"### {deriv_icon} Derivatives")
-    st.write(deriv_label)
-
-with s5:
-    st.markdown("### Final Read")
-    st.write(action_val)
-
-st.divider()
-
-st.subheader("Strategy And News")
-
-sn1, sn2, sn3, sn4, sn5 = st.columns(5)
-
-with sn1:
-    st.metric("Strategy", strategy_mode_val)
-
-with sn2:
-    strategy_score_val = latest_event.get("strategy_score")
-    st.metric("Strategy Score", "N/A" if strategy_score_val is None or pd.isna(strategy_score_val) else int(strategy_score_val))
-
-with sn3:
-    st.metric("News Bias", news_bias_val)
-
-with sn4:
-    st.metric("News Sentiment", "N/A" if news_sentiment_val is None or pd.isna(news_sentiment_val) else round(float(news_sentiment_val), 3))
-
-with sn5:
-    st.metric("News Impact", "N/A" if news_impact_val is None or pd.isna(news_impact_val) else round(float(news_impact_val), 3))
-
-if latest_ticket is not None:
-    ticket_news = latest_ticket.get("news", {}) or latest_ticket.get("event_snapshot", {}).get("news", {})
-    headlines = ticket_news.get("headlines", [])
-    if headlines:
-        st.markdown("**Top News Headlines**")
-        for item in headlines[:5]:
-            title = str(item.get("title", ""))
-            topic = str(item.get("topic", "general"))
-            impact = item.get("impact")
-            sentiment = item.get("sentiment")
-            st.write(f"- [{title}]({item.get('link', '#')}) | topic={topic} | impact={impact} | sentiment={sentiment}")
-
-st.divider()
-
-st.subheader("Confidence Panel")
-
-score_val = latest_event.get("score")
-rr_val = latest_event.get("rr_estimated")
-decision_val = str(latest_event.get("decision", "N/A"))
-setup_val = str(latest_event.get("setup", "N/A"))
-quantum_score_val = latest_event.get("quantum_score")
-
-grade_label, grade_icon = grade_badge(score_val)
-rr_label, rr_icon = rr_quality_label(rr_val)
-setup_state, setup_state_icon = setup_state_label(decision_val, setup_val)
-
-c1, c2, c3, c4, c5 = st.columns(5)
-
-with c1:
-    st.markdown("### Score")
-    st.write("N/A" if score_val is None or pd.isna(score_val) else int(score_val))
-
-with c2:
-    st.markdown(f"### {grade_icon} Grade")
-    st.write(grade_label)
-
-with c3:
-    st.markdown(f"### {rr_icon} RR Quality")
-    st.write(rr_label)
-
-with c4:
-    st.markdown(f"### {setup_state_icon} Setup State")
-    st.write(setup_state)
-
-with c5:
-    st.markdown("### Quantum Score")
-    st.write("N/A" if quantum_score_val is None or pd.isna(quantum_score_val) else int(quantum_score_val))
-
-st.divider()
-
-st.subheader("Quantum Layer")
-
-q1, q2, q3, q4, q5 = st.columns(5)
-
-with q1:
-    st.metric("Quantum State", quantum_state_val)
-
-with q2:
-    st.metric(
-        "Coherence",
-        "N/A" if quantum_coherence_val is None or pd.isna(quantum_coherence_val) else round(float(quantum_coherence_val), 3),
-    )
-
-with q3:
-    st.metric(
-        "Phase Bias",
-        "N/A" if quantum_phase_val is None or pd.isna(quantum_phase_val) else round(float(quantum_phase_val), 3),
-    )
-
-with q4:
-    qv = latest_event.get("quantum_interference")
-    st.metric(
-        "Interference",
-        "N/A" if qv is None or pd.isna(qv) else round(float(qv), 3),
-    )
-
-with q5:
-    qv = latest_event.get("quantum_tunneling")
-    st.metric(
-        "Tunneling Prob.",
-        "N/A" if qv is None or pd.isna(qv) else round(float(qv), 3),
-    )
-
-st.divider()
-
-st.subheader("Final Verdict")
-
-verdict_title, verdict_body = final_verdict_text(
-    context=str(latest_event.get("context", "N/A")),
-    action=str(latest_event.get("action", "N/A")),
-    decision=str(latest_event.get("decision", "N/A")),
-    setup=str(latest_event.get("setup", "N/A")),
-    score=latest_event.get("score"),
-    rr_estimated=latest_event.get("rr_estimated"),
-    crowding=str(latest_event.get("crowding", "N/A")),
-    rr_min_required=float(runtime_cfg["rr_min"]),
-    min_score_for_signal=int(runtime_cfg["min_score_for_signal"]),
-)
-
-st.markdown(
-    f"""
-    <div style="
-        background:#0f172a;
-        color:white;
-        padding:16px;
-        border-radius:14px;
-        border:1px solid #334155;
-        margin-bottom:10px;
-    ">
-        <div style="font-size:20px; font-weight:700; margin-bottom:8px;">
-            {verdict_title}
+        <div style="
+            background: linear-gradient(135deg, #0f172a 0%, #111827 45%, #0b1220 100%);
+            color: white;
+            padding: 18px 20px;
+            border-radius: 18px;
+            border: 1px solid #334155;
+            margin-bottom: 18px;
+        ">
+            <div style="display:grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap:14px;">
+                <div>
+                    <div style="font-size:12px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.08em;">System Status</div>
+                    <div style="font-size:20px; font-weight:700;">{system_status}</div>
+                </div>
+                <div>
+                    <div style="font-size:12px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.08em;">Last Update</div>
+                    <div style="font-size:20px; font-weight:700;">{last_update}</div>
+                </div>
+                <div>
+                    <div style="font-size:12px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.08em;">Latest Signal State</div>
+                    <div style="font-size:20px; font-weight:700;">{latest_signal_state}</div>
+                </div>
+                <div>
+                    <div style="font-size:12px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.08em;">Scoring Mode</div>
+                    <div style="font-size:20px; font-weight:700;">{scoring_mode}</div>
+                </div>
+                <div>
+                    <div style="font-size:12px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.08em;">Dashboard Mode</div>
+                    <div style="font-size:20px; font-weight:700;">{dashboard_mode_label}</div>
+                </div>
+            </div>
         </div>
-        <div style="font-size:15px; color:#cbd5e1;">
-            {verdict_body}
-        </div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-st.divider()
-
-st.subheader("Market Microstructure")
-
-imb = latest_event.get("ob_imbalance")
-raw = latest_event.get("ob_raw")
-age = latest_event.get("ob_age_ms")
-
-m1, m2, m3 = st.columns(3)
-
-with m1:
-    val = "N/A" if pd.isna(imb) or imb is None else round(float(imb), 3)
-    st.metric("OrderBook Imbalance Avg", val)
-
-with m2:
-    val = "N/A" if pd.isna(raw) or raw is None else round(float(raw), 3)
-    st.metric("OrderBook Raw", val)
-
-with m3:
-    val = "N/A" if pd.isna(age) or age is None else int(age)
-    st.metric("Data Age (ms)", val)
-
-pressure, icon = pressure_label(imb)
-st.markdown(f"### Pressure: {icon} {pressure}")
-
-st.divider()
-
-st.subheader("Derivatives Context")
-
-d1, d2, d3, d4 = st.columns(4)
-
-with d1:
-    fr = latest_event.get("funding_rate")
-    st.metric("Funding Rate", "N/A" if fr is None or pd.isna(fr) else round(float(fr), 6))
-
-with d2:
-    oi_now = latest_event.get("oi_now")
-    st.metric("Open Interest Now", "N/A" if oi_now is None or pd.isna(oi_now) else round(float(oi_now), 2))
-
-with d3:
-    oi_ch = latest_event.get("oi_change_pct")
-    st.metric("OI Change 15m", "N/A" if oi_ch is None or pd.isna(oi_ch) else f"{float(oi_ch) * 100:.2f}%")
-
-with d4:
-    crowding = latest_event.get("crowding", "N/A")
-    st.metric("Crowding", crowding)
-
-funding_label, funding_icon = funding_bias_label(fr)
-oi_label, oi_icon = oi_momentum_label(oi_ch)
-
-st.markdown(f"**Funding Bias:** {funding_icon} {funding_label}")
-st.markdown(f"**OI Momentum:** {oi_icon} {oi_label}")
-
-st.divider()
-
-st.subheader("Liquidity Risk")
-
-l1, l2 = st.columns(2)
-
-with l1:
-    st.metric(
-        "Nearest Liquidation Cluster",
-        "N/A" if liq_cluster is None else round(float(liq_cluster), 2),
+        """,
+        unsafe_allow_html=True,
     )
 
-with l2:
-    st.markdown(f"### {squeeze_icon} {squeeze_label}")
+    signal_label = f"{humanize_presenter_label(latest_event.get('decision'))} / {humanize_presenter_label(latest_event.get('setup'))}"
+    active_score = format_value(latest_event.get("score"))
+    calibrated_score = format_value(latest_event.get("calibrated_hybrid_score"), precision=2)
+    quantum_state = humanize_presenter_label(latest_event.get("quantum_state"))
+    decision_value = latest_event.get("decision")
+    setup_value = latest_event.get("setup")
+    context_value = latest_event.get("context")
+    cohort_summary = presenter_signal_summary(latest_event)
 
-st.divider()
+    card_style = "background:#ffffff;color:#0f172a;padding:18px;border-radius:18px;border:1px solid #e2e8f0;box-shadow:0 1px 2px rgba(15,23,42,0.06);"
+    value_style = "font-size:30px;font-weight:800;line-height:1.05;margin-top:2px;"
+    label_style = "font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px;"
 
-left, right = st.columns([1.25, 1])
-
-with left:
-    st.subheader("BTCUSDT Chart (M15)")
-
-    if not df_candles.empty:
-        fig = go.Figure()
-
-        fig.add_trace(
-            go.Candlestick(
-                x=df_candles["time"],
-                open=df_candles["open"],
-                high=df_candles["high"],
-                low=df_candles["low"],
-                close=df_candles["close"],
-                name="BTCUSDT",
-            )
+    def _plain_card(title: str, value, subtitle: str = "", emphasis: str = "") -> None:
+        st.markdown(
+            f"""
+            <div style="{card_style}">
+                <div style="{label_style}">{title}</div>
+                <div style="{value_style}">{value}</div>
+                <div style="font-size:13px;color:#475569;margin-top:8px;">{subtitle}</div>
+                <div style="font-size:12px;color:#0f172a;margin-top:8px;font-weight:600;">{emphasis}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
 
-        entry = latest_event.get("entry")
-        sl = latest_event.get("sl")
-        tp1 = latest_event.get("tp1")
-        tp2 = latest_event.get("tp2")
+    c1, c2, c3, c4 = st.columns([1.2, 1.2, 1.2, 1.2])
+    with c1:
+        _plain_card("Latest Signal", signal_label, f"Context: {humanize_presenter_label(context_value)}", f"Decision badge: {humanize_presenter_label(decision_value)}")
+    with c2:
+        _plain_card("Active Score", active_score, f"Calibrated hybrid: {calibrated_score}", f"Threshold view: {format_value(latest_event.get('scoring_mode'))}")
+    with c3:
+        _plain_card("Quantum State", quantum_state, f"Coherence: {format_value(latest_event.get('quantum_coherence'), precision=3)}", f"Mode badge: {humanize_presenter_label(latest_event.get('quantum_state'))}")
+    with c4:
+        _plain_card("Validation", format_value(market_read_summary.get("validation_rate"), precision=2), f"Validated rows: {market_read_summary.get('validated', 0)}", f"Avg read score: {format_value(market_read_summary.get('avg_read_score'))}")
 
-        if entry is not None and not pd.isna(entry):
-            fig.add_hline(y=float(entry), line_dash="solid", line_color="blue", annotation_text="ENTRY")
+    st.markdown(
+        f"""
+        <div style="
+            background:#f8fafc;
+            border:1px solid #e2e8f0;
+            border-radius:16px;
+            padding:16px 18px;
+            margin: 12px 0 18px 0;
+        ">
+            <div style="font-size:12px; color:#64748b; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:8px;">Interpretation</div>
+            <div style="font-size:16px; color:#0f172a; line-height:1.55;">{cohort_summary}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-        if sl is not None and not pd.isna(sl):
-            fig.add_hline(y=float(sl), line_dash="dot", line_color="red", annotation_text="SL")
+    st.divider()
+    left, right = st.columns([1.15, 0.85])
+    with left:
+        st.subheader("Recent Activity")
+        chart_a, chart_b = st.columns(2)
+        with chart_a:
+            _simple_series_chart(recent_df, "decision", "Recent Decisions", "#2563eb")
+        with chart_b:
+            if "score" in recent_df.columns and not recent_df.empty:
+                fig = go.Figure()
+                fig.add_trace(
+                    go.Histogram(
+                        x=pd.to_numeric(recent_df["score"], errors="coerce").dropna(),
+                        nbinsx=12,
+                        marker_color="#14b8a6",
+                    )
+                )
+                fig.update_layout(height=270, margin=dict(l=8, r=8, t=24, b=8), title="Score Distribution")
+                st.plotly_chart(fig, width="stretch")
+            else:
+                st.info("No score distribution yet.")
 
-        if tp1 is not None and not pd.isna(tp1):
-            fig.add_hline(y=float(tp1), line_dash="dash", line_color="green", annotation_text="TP1")
-
-        if tp2 is not None and not pd.isna(tp2):
-            fig.add_hline(y=float(tp2), line_dash="dash", line_color="green", annotation_text="TP2")
-
-        if liq_cluster is not None:
-            fig.add_hline(
-                y=float(liq_cluster),
-                line_dash="dot",
-                line_color="orange",
-                annotation_text="LIQ CLUSTER",
+    with right:
+        st.subheader("Validation")
+        if "validation_status" in market_read_df.columns and not market_read_df.empty:
+            _simple_series_chart(market_read_df, "validation_status", "Validation Status", "#f59e0b")
+        else:
+            st.info("No validation data yet.")
+        st.subheader("Notifications")
+        if latest_alert is None:
+            st.info("Notifications panel placeholder for future phone alerts integration.")
+        else:
+            st.markdown(
+                f"""
+                <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:14px;padding:14px 16px;">
+                    <div style="font-size:13px;color:#9a3412;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px;">Latest Alert</div>
+                    <div style="font-size:18px;font-weight:700;color:#7c2d12;">{format_value(latest_alert.get('type'))}</div>
+                    <div style="font-size:13px;color:#7c2d12;margin-top:4px;">{format_value(latest_alert.get('title'))}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
             )
 
-        fig.update_layout(
-            height=520,
-            xaxis_rangeslider_visible=False,
-            margin=dict(l=10, r=10, t=10, b=10),
+    st.divider()
+    st.subheader("Recent Important Signals")
+    important_df = recent_df.copy()
+    if not important_df.empty:
+        if "decision" in important_df.columns:
+            important_df = important_df[important_df["decision"].fillna("").isin(["BUY", "SELL", "FLAT", "BLOCKED"])]
+        display_cols = [
+            "timestamp",
+            "decision",
+            "setup",
+            "context",
+            "score",
+            "calibrated_hybrid_score",
+            "quantum_state",
+            "strategy_mode",
+        ]
+        display_cols = [c for c in display_cols if c in important_df.columns]
+        important_view = important_df[display_cols].head(8).fillna("—")
+        st.dataframe(
+            important_view,
+            width="stretch",
+            hide_index=True,
         )
-
-        st.plotly_chart(fig, width="stretch")
     else:
-        st.info("No candle data yet.")
+        st.info("No recent signals.")
 
-with right:
-    st.subheader("Latest Event Details")
-    st.write(f"**Event Type:** {latest_event.get('event_type', 'N/A')}")
-    st.write(f"**Symbol:** {latest_event.get('symbol', 'N/A')}")
-    st.write(f"**Active Score:** {format_value(latest_event.get('score'))}")
-    st.write(f"**Legacy / Heuristic Score:** {format_value(latest_event.get('heuristic_score'))}")
-    st.write(f"**Strategy Score:** {format_value(latest_event.get('strategy_score'))}")
-    st.write(f"**Raw Hybrid Score:** {format_value(latest_event.get('raw_hybrid_score'), precision=2)}")
-    st.write(f"**Calibrated Hybrid Score:** {format_value(latest_event.get('calibrated_hybrid_score'), precision=2)}")
-    st.write(f"**Scoring Mode:** {format_value(latest_event.get('scoring_mode'))}")
-    st.write(f"**RR Estimated:** {latest_event.get('rr_estimated', 'N/A')}")
-    st.write(f"**Quantum Score:** {latest_event.get('quantum_score', 'N/A')}")
-    st.write(f"**Entry:** {latest_event.get('entry', 'N/A')}")
-    st.write(f"**SL:** {latest_event.get('sl', 'N/A')}")
-    st.write(f"**TP1:** {latest_event.get('tp1', 'N/A')}")
-    st.write(f"**TP2:** {latest_event.get('tp2', 'N/A')}")
+    st.divider()
+    st.subheader("System Notes")
+    notes_left, notes_right = st.columns([1.2, 0.8])
+    with notes_left:
+        st.write(f"**Context:** {humanize_presenter_label(latest_event.get('context'))}")
+        st.write(f"**Setup:** {humanize_presenter_label(setup_value)}")
+        st.write(f"**Decision:** {humanize_presenter_label(decision_value)}")
+        st.write(f"**Quantum State:** {humanize_presenter_label(latest_event.get('quantum_state'))}")
+    with notes_right:
+        st.write(f"**Nearest Liquidation Cluster:** {format_value(data['liq_cluster'], precision=2)}")
+        st.write(f"**Squeeze Risk:** {data['squeeze_icon']} {data['squeeze_label']}")
+        st.write(f"**Scoring Mode:** {format_value(data['active_scoring_mode'])}")
 
-    st.subheader("Latest Snapshot")
     if latest_snapshot is not None:
         st.image(str(latest_snapshot), width="stretch")
-    else:
-        st.info("No snapshot available yet.")
 
-st.divider()
 
-col_json, col_info = st.columns([1, 1])
+def render_technical_dashboard(data: dict) -> None:
+    runtime_cfg = data["runtime_cfg"]
+    latest_event = data["latest_event"]
+    latest_ticket = data["latest_ticket"]
+    latest_snapshot = data["latest_snapshot"]
+    recent_df = data["recent_df"]
+    latest_alert = data["latest_alert"]
+    market_read_df = data["market_read_df"]
+    market_read_summary = data["market_read_summary"]
+    df_candles = data["df_candles"]
+    latest_price = data["latest_price"]
+    liq_cluster = data["liq_cluster"]
+    squeeze_label = data["squeeze_label"]
+    squeeze_icon = data["squeeze_icon"]
+    active_scoring_mode = data["active_scoring_mode"]
 
-with col_json:
-    st.subheader("Latest Ticket JSON")
+    st.title("Trading Assistant Dashboard")
+
+    top1, top2, top3 = st.columns([1, 1, 1])
+    with top1:
+        if st.button("Refresh"):
+            st.rerun()
+    with top2:
+        if st.button("Analyze now"):
+            send_command("a")
+            st.success("Analyze command queued.")
+    with top3:
+        if st.button("Status snapshot"):
+            send_command("s")
+            st.success("Status command queued.")
+
+    sm1, sm2 = st.columns([1, 2])
+    with sm1:
+        selected_scoring_mode = st.selectbox(
+            "Scoring Approach",
+            options=list(SCORING_MODES),
+            index=list(SCORING_MODES).index(active_scoring_mode),
+            key="scoring_mode_selector",
+        )
+    with sm2:
+        st.markdown(f"**Active Scoring Mode:** `{active_scoring_mode}`")
+        st.caption("La modifica viene salvata in `out/config_runtime.json` e applicata nei cicli successivi.")
+
+    if selected_scoring_mode != active_scoring_mode:
+        if save_scoring_mode(selected_scoring_mode):
+            st.success(f"Scoring mode aggiornato a `{selected_scoring_mode}`.")
+            st.rerun()
+
+    if latest_event is None:
+        st.warning("No events found yet.")
+        st.stop()
+
+    st.subheader("Live Status")
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1:
+        color_badge("Decision", str(latest_event.get("decision", "N/A")))
+    with c2:
+        color_badge("Setup", str(latest_event.get("setup", "N/A")))
+    with c3:
+        color_badge("Context", str(latest_event.get("context", "N/A")))
+    with c4:
+        color_badge("Action", str(latest_event.get("action", "N/A")))
+    with c5:
+        color_badge("Quantum", str(latest_event.get("quantum_state", "N/A")))
+
+    st.write(f"**Timestamp:** {format_value(latest_event.get('timestamp'))}")
+    st.write(f"**Why:** {format_value(latest_event.get('why'))}")
+
+    meta1, meta2, meta3 = st.columns(3)
+    with meta1:
+        st.metric("Strategy Mode", format_value(latest_event.get("strategy_mode")))
+    with meta2:
+        st.metric("News Bias", format_value(latest_event.get("news_bias")))
+    with meta3:
+        st.metric("News Score", format_value(latest_event.get("news_score")))
+
+    st.divider()
+    st.subheader("Alerts And Validation")
+    av1, av2, av3, av4 = st.columns(4)
+    with av1:
+        st.metric("Validated Rate", "N/A" if market_read_summary["validation_rate"] is None else f"{market_read_summary['validation_rate']:.2f}%")
+    with av2:
+        st.metric("Avg Read Score", "N/A" if market_read_summary["avg_read_score"] is None else market_read_summary["avg_read_score"])
+    with av3:
+        st.metric("Validated / Completed", f"{market_read_summary['validated']}/{market_read_summary['completed']}")
+    with av4:
+        st.metric("Latest Alert", "none" if latest_alert is None else str(latest_alert.get("type", "N/A")))
+
+    if latest_alert is not None:
+        st.markdown(
+            f"""
+            **Alert Severity:** {latest_alert.get("severity", "N/A")}  
+            **Alert Title:** {latest_alert.get("title", "N/A")}  
+            **Alert Body:** {latest_alert.get("body", "N/A")}
+            """
+        )
+
+    completed_reads = (
+        market_read_df[market_read_df["validation_status"].isin(["validated", "invalidated", "mixed"])].copy()
+        if not market_read_df.empty and "validation_status" in market_read_df.columns
+        else pd.DataFrame()
+    )
+    if not completed_reads.empty:
+        latest_read = completed_reads.iloc[0]
+        st.markdown(
+            f"""
+            **Latest Completed Read:** {latest_read.get("validation_status", "N/A")}  
+            **Read Score:** {latest_read.get("read_score", "N/A")}  
+            **Validation Note:** {latest_read.get("validation_note", "N/A")}
+            """
+        )
+
+    st.divider()
+    st.subheader("Summary Panel")
+    context_val = str(latest_event.get("context", "N/A"))
+    action_val = str(latest_event.get("action", "N/A"))
+    imb_summary = latest_event.get("ob_imbalance")
+    crowding_val = latest_event.get("crowding", "N/A")
+    funding_val = latest_event.get("funding_rate")
+    oi_change_val = latest_event.get("oi_change_pct")
+    quantum_state_val = str(latest_event.get("quantum_state", "N/A"))
+    quantum_coherence_val = latest_event.get("quantum_coherence")
+    quantum_phase_val = latest_event.get("quantum_phase_bias")
+    strategy_mode_val = str(latest_event.get("strategy_mode", "N/A"))
+    news_bias_val = str(latest_event.get("news_bias", "N/A"))
+    news_sentiment_val = latest_event.get("news_sentiment")
+    news_impact_val = latest_event.get("news_impact")
+
+    structure_label, structure_icon = structure_read_label(context_val)
+    quantum_label, quantum_icon = quantum_read_label(quantum_state_val, quantum_coherence_val, quantum_phase_val)
+    orderbook_label, orderbook_icon = orderbook_read_label(imb_summary)
+    deriv_label, deriv_icon = derivatives_read_label(crowding_val, funding_val, oi_change_val)
+
+    s1, s2, s3, s4, s5 = st.columns(5)
+    with s1:
+        st.markdown(f"### {structure_icon} Structure")
+        st.write(structure_label)
+    with s2:
+        st.markdown(f"### {quantum_icon} Quantum")
+        st.write(quantum_label)
+    with s3:
+        st.markdown(f"### {orderbook_icon} Order Book")
+        st.write(orderbook_label)
+    with s4:
+        st.markdown(f"### {deriv_icon} Derivatives")
+        st.write(deriv_label)
+    with s5:
+        st.markdown("### Final Read")
+        st.write(action_val)
+
+    st.divider()
+    st.subheader("Strategy And News")
+    sn1, sn2, sn3, sn4, sn5 = st.columns(5)
+    with sn1:
+        st.metric("Strategy", strategy_mode_val)
+    with sn2:
+        st.metric("Strategy Score", format_value(latest_event.get("strategy_score")))
+    with sn3:
+        st.metric("News Bias", news_bias_val)
+    with sn4:
+        st.metric("News Sentiment", format_value(news_sentiment_val, precision=3))
+    with sn5:
+        st.metric("News Impact", format_value(news_impact_val, precision=3))
+
     if latest_ticket is not None:
-        st.json(latest_ticket)
-    else:
-        st.info("No ticket JSON found yet.")
+        ticket_news = latest_ticket.get("news", {}) or latest_ticket.get("event_snapshot", {}).get("news", {})
+        headlines = ticket_news.get("headlines", [])
+        if headlines:
+            st.markdown("**Top News Headlines**")
+            for item in headlines[:5]:
+                title = str(item.get("title", ""))
+                topic = str(item.get("topic", "general"))
+                impact = item.get("impact")
+                sentiment = item.get("sentiment")
+                st.write(f"- [{title}]({item.get('link', '#')}) | topic={topic} | impact={impact} | sentiment={sentiment}")
 
-with col_info:
-    st.subheader("Quick Read")
+    st.divider()
+    st.subheader("Confidence Panel")
+    score_val = latest_event.get("score")
+    rr_val = latest_event.get("rr_estimated")
+    decision_val = str(latest_event.get("decision", "N/A"))
+    setup_val = str(latest_event.get("setup", "N/A"))
+    quantum_score_val = latest_event.get("quantum_score")
+    grade_label, grade_icon = grade_badge(score_val)
+    rr_label, rr_icon = rr_quality_label(rr_val)
+    setup_state, setup_state_icon = setup_state_label(decision_val, setup_val)
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1:
+        st.markdown("### Score")
+        st.write(format_value(score_val))
+    with c2:
+        st.markdown(f"### {grade_icon} Grade")
+        st.write(grade_label)
+    with c3:
+        st.markdown(f"### {rr_icon} RR Quality")
+        st.write(rr_label)
+    with c4:
+        st.markdown(f"### {setup_state_icon} Setup State")
+        st.write(setup_state)
+    with c5:
+        st.markdown("### Quantum Score")
+        st.write(format_value(quantum_score_val))
 
-    context = str(latest_event.get("context", "N/A"))
-    action = str(latest_event.get("action", "N/A"))
-    why = str(latest_event.get("why", "N/A"))
-    crowding = latest_event.get("crowding", "N/A")
+    st.divider()
+    st.subheader("Quantum Layer")
+    q1, q2, q3, q4, q5 = st.columns(5)
+    with q1:
+        st.metric("Quantum State", quantum_state_val)
+    with q2:
+        st.metric("Coherence", format_value(quantum_coherence_val, precision=3))
+    with q3:
+        st.metric("Phase Bias", format_value(quantum_phase_val, precision=3))
+    with q4:
+        st.metric("Interference", format_value(latest_event.get("quantum_interference"), precision=3))
+    with q5:
+        st.metric("Tunneling Prob.", format_value(latest_event.get("quantum_tunneling"), precision=3))
 
+    st.divider()
+    st.subheader("Final Verdict")
+    verdict_title, verdict_body = final_verdict_text(
+        context=str(latest_event.get("context", "N/A")),
+        action=str(latest_event.get("action", "N/A")),
+        decision=str(latest_event.get("decision", "N/A")),
+        setup=str(latest_event.get("setup", "N/A")),
+        score=latest_event.get("score"),
+        rr_estimated=latest_event.get("rr_estimated"),
+        crowding=str(latest_event.get("crowding", "N/A")),
+        rr_min_required=float(runtime_cfg["rr_min"]),
+        min_score_for_signal=int(runtime_cfg["min_score_for_signal"]),
+    )
     st.markdown(
         f"""
-        **Context:** {context}  
-        **Action:** {action}  
-        **Strategy:** {strategy_mode_val}  
-        **Reason:** {why}  
-        **News Bias:** {news_bias_val}  
-        **News Sentiment:** {news_sentiment_val}  
-        **News Impact:** {news_impact_val}  
-        **Quantum State:** {quantum_state_val}  
-        **Nearest Liquidation Cluster:** {liq_cluster if liq_cluster is not None else "N/A"}  
-        **Squeeze Risk:** {squeeze_icon} {squeeze_label}  
-        **Crowding:** {crowding}  
-        **Funding Bias:** {funding_icon} {funding_label}  
-        **OI Momentum:** {oi_icon} {oi_label}
-        """
+        <div style="
+            background:#0f172a;
+            color:white;
+            padding:16px;
+            border-radius:14px;
+            border:1px solid #334155;
+            margin-bottom:10px;
+        ">
+            <div style="font-size:20px; font-weight:700; margin-bottom:8px;">
+                {verdict_title}
+            </div>
+            <div style="font-size:15px; color:#cbd5e1;">
+                {verdict_body}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
-st.divider()
+    st.divider()
+    st.subheader("Market Microstructure")
+    imb = latest_event.get("ob_imbalance")
+    raw = latest_event.get("ob_raw")
+    age = latest_event.get("ob_age_ms")
+    m1, m2, m3 = st.columns(3)
+    with m1:
+        st.metric("OrderBook Imbalance Avg", format_value(imb, precision=3))
+    with m2:
+        st.metric("OrderBook Raw", format_value(raw, precision=3))
+    with m3:
+        st.metric("Data Age (ms)", format_value(age))
+    pressure, icon = pressure_label(imb)
+    st.markdown(f"### Pressure: {icon} {pressure}")
 
-st.subheader("Recent Journal Events")
-if recent_df.empty:
-    st.info("No recent events.")
+    st.divider()
+    st.subheader("Derivatives Context")
+    d1, d2, d3, d4 = st.columns(4)
+    with d1:
+        fr = latest_event.get("funding_rate")
+        st.metric("Funding Rate", format_value(fr, precision=6))
+    with d2:
+        oi_now = latest_event.get("oi_now")
+        st.metric("Open Interest Now", format_value(oi_now, precision=2))
+    with d3:
+        oi_ch = latest_event.get("oi_change_pct")
+        st.metric("OI Change 15m", format_value(f"{float(oi_ch) * 100:.2f}%" if oi_ch is not None and not pd.isna(oi_ch) else None))
+    with d4:
+        crowding = latest_event.get("crowding", "N/A")
+        st.metric("Crowding", crowding)
+    funding_label, funding_icon = funding_bias_label(fr)
+    oi_label, oi_icon = oi_momentum_label(oi_ch)
+    st.markdown(f"**Funding Bias:** {funding_icon} {funding_label}")
+    st.markdown(f"**OI Momentum:** {oi_icon} {oi_label}")
+
+    st.divider()
+    st.subheader("Liquidity Risk")
+    l1, l2 = st.columns(2)
+    with l1:
+        st.metric("Nearest Liquidation Cluster", format_value(liq_cluster, precision=2))
+    with l2:
+        st.markdown(f"### {squeeze_icon} {squeeze_label}")
+
+    st.divider()
+    left, right = st.columns([1.25, 1])
+    with left:
+        st.subheader("BTCUSDT Chart (M15)")
+        if not df_candles.empty:
+            fig = go.Figure()
+            fig.add_trace(go.Candlestick(x=df_candles["time"], open=df_candles["open"], high=df_candles["high"], low=df_candles["low"], close=df_candles["close"], name="BTCUSDT"))
+            entry = latest_event.get("entry")
+            sl = latest_event.get("sl")
+            tp1 = latest_event.get("tp1")
+            tp2 = latest_event.get("tp2")
+            if entry is not None and not pd.isna(entry):
+                fig.add_hline(y=float(entry), line_dash="solid", line_color="blue", annotation_text="ENTRY")
+            if sl is not None and not pd.isna(sl):
+                fig.add_hline(y=float(sl), line_dash="dot", line_color="red", annotation_text="SL")
+            if tp1 is not None and not pd.isna(tp1):
+                fig.add_hline(y=float(tp1), line_dash="dash", line_color="green", annotation_text="TP1")
+            if tp2 is not None and not pd.isna(tp2):
+                fig.add_hline(y=float(tp2), line_dash="dash", line_color="green", annotation_text="TP2")
+            if liq_cluster is not None:
+                fig.add_hline(y=float(liq_cluster), line_dash="dot", line_color="orange", annotation_text="LIQ CLUSTER")
+            fig.update_layout(height=520, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10))
+            st.plotly_chart(fig, width="stretch")
+        else:
+            st.info("No candle data yet.")
+    with right:
+        st.subheader("Latest Event Details")
+        st.write(f"**Event Type:** {format_value(latest_event.get('event_type'))}")
+        st.write(f"**Symbol:** {format_value(latest_event.get('symbol'))}")
+        st.write(f"**Active Score:** {format_value(latest_event.get('score'))}")
+        st.write(f"**Legacy / Heuristic Score:** {format_value(latest_event.get('heuristic_score'))}")
+        st.write(f"**Strategy Score:** {format_value(latest_event.get('strategy_score'))}")
+        st.write(f"**Raw Hybrid Score:** {format_value(latest_event.get('raw_hybrid_score'), precision=2)}")
+        st.write(f"**Calibrated Hybrid Score:** {format_value(latest_event.get('calibrated_hybrid_score'), precision=2)}")
+        st.write(f"**Scoring Mode:** {format_value(latest_event.get('scoring_mode'))}")
+        st.write(f"**RR Estimated:** {format_value(latest_event.get('rr_estimated'))}")
+        st.write(f"**Quantum Score:** {format_value(latest_event.get('quantum_score'))}")
+        st.write(f"**Entry:** {format_value(latest_event.get('entry'))}")
+        st.write(f"**SL:** {format_value(latest_event.get('sl'))}")
+        st.write(f"**TP1:** {format_value(latest_event.get('tp1'))}")
+        st.write(f"**TP2:** {format_value(latest_event.get('tp2'))}")
+        st.subheader("Latest Snapshot")
+        if latest_snapshot is not None:
+            st.image(str(latest_snapshot), width="stretch")
+        else:
+            st.info("No snapshot available yet.")
+
+    st.divider()
+    col_json, col_info = st.columns([1, 1])
+    with col_json:
+        st.subheader("Latest Ticket JSON")
+        if latest_ticket is not None:
+            st.json(latest_ticket)
+        else:
+            st.info("No ticket JSON found yet.")
+    with col_info:
+        st.subheader("Quick Read")
+        context = str(latest_event.get("context", "N/A"))
+        action = str(latest_event.get("action", "N/A"))
+        why = str(latest_event.get("why", "N/A"))
+        crowding = latest_event.get("crowding", "N/A")
+        st.markdown(
+            f"""
+            **Context:** {context}  
+            **Action:** {action}  
+            **Strategy:** {strategy_mode_val}  
+            **Reason:** {why}  
+            **News Bias:** {news_bias_val}  
+            **News Sentiment:** {news_sentiment_val}  
+            **News Impact:** {news_impact_val}  
+            **Quantum State:** {quantum_state_val}  
+            **Nearest Liquidation Cluster:** {liq_cluster if liq_cluster is not None else "N/A"}  
+            **Squeeze Risk:** {squeeze_icon} {squeeze_label}  
+            **Crowding:** {crowding}  
+            **Funding Bias:** {funding_icon} {funding_label}  
+            **OI Momentum:** {oi_icon} {oi_label}
+            """
+        )
+
+    st.divider()
+    st.subheader("Recent Journal Events")
+    if recent_df.empty:
+        st.info("No recent events.")
+    else:
+        st.dataframe(recent_df.fillna("—"), width="stretch")
+
+    st.divider()
+    st.caption("Trading Assistant MVP dashboard")
+
+
+dashboard_mode = st.sidebar.radio(
+    "Dashboard Mode",
+    options=("Technical Mode", "Presenter Mode"),
+    index=0,
+)
+st.sidebar.caption("Presenter Mode is a clean, read-only view for demonstrations and reviews.")
+
+dashboard_data = _signal_dashboard_context()
+
+if dashboard_mode == "Presenter Mode":
+    render_presenter_dashboard(dashboard_data)
 else:
-    st.dataframe(recent_df.fillna("—"), width="stretch")
-
-st.divider()
-st.caption("Trading Assistant MVP dashboard")
+    render_technical_dashboard(dashboard_data)
